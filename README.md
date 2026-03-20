@@ -15,4 +15,18 @@
 3. Chạy backend:
    - `cd backend`
    - `mvn spring-boot:run`
+
+## Deploy (Docker - Nginx + React + Spring Boot)
+1. Tạo file `.env` ở thư mục gốc từ `.env.example` và điền các giá trị:
+   - `MYSQL_ROOT_PASSWORD`
+   - `MYSQL_PASSWORD`
+   - `SPRING_DATASOURCE_PASSWORD`
+2. Build và chạy toàn bộ stack:
+   - `docker compose -f docker-compose.deploy.yml up -d --build`
+3. Mở:
+   - `http://localhost/`
+
+Ghi chú:
+- React gọi API bằng cùng domain qua path `/api` (ngăn lỗi CORS khi deploy).
+- Nginx sẽ proxy `/api/*` sang container backend.
   

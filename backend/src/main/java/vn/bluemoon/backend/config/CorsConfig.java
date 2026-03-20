@@ -9,8 +9,9 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                // Allow all localhost ports for dev (Vite can run on 5173, 5174, 5175, ...)
-                .allowedOriginPatterns("http://localhost:*", "http://127.0.0.1:*")
+                // Allow all origins so deployed frontend (Vercel/Railway) can call the API.
+                // This is required during development/deploy when frontend and backend are on different domains.
+                .allowedOriginPatterns("*")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .allowCredentials(false)

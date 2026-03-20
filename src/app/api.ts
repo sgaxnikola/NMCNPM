@@ -1,6 +1,9 @@
 import type { UserRole } from "./types";
 
-const API_BASE = "http://localhost:8080/api";
+// Always call same-origin "/api" so it works both:
+// - dev: Vite proxy /api -> http://localhost:8080
+// - prod: nginx reverse proxy /api -> backend
+const API_BASE = "/api";
 
 // Simple in-memory caching to reduce repeated network calls in UI.
 // This improves perceived speed (especially when opening dialogs/screens repeatedly).
