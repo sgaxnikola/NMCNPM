@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+
+.env
+.env.*
+backend/.env
+
+!.env.example
+
+# Cursor / IDE
+.cursor/
+.vscode/
+.idea/
+
+# Backend build artifacts
+backend/target/
+backend/*.jar
+
+# OS files
+Thumbs.db
+Desktop.ini
+
