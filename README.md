@@ -5,7 +5,7 @@
   Run `npm run dev` to start the development server.
 
 ## Backend (Spring Boot + MySQL)
-1. Cập nhật biến môi trường trong file `.env` ở thư mục gốc (hoặc copy từ `.env.example`):
+1. Copy file `backend/.env.example` sang `backend/.env` và chỉnh các giá trị:
    - `SPRING_DATASOURCE_PASSWORD`
    - `MYSQL_PASSWORD`
    - `MYSQL_ROOT_PASSWORD`
