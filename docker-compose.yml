@@ -1,0 +1,50 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: bluemoon-mysql-prod
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: bluemoon
+      MYSQL_USER: bluemoon_app
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/sql/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - bluemoon_net
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bluemoon-api
+    depends_on:
+      - mysql
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+    ports:
+      - "8080:8080"
+    networks:
+      - bluemoon_net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: bluemoon-web
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    networks:
+      - bluemoon_net
+
+networks:
+  bluemoon_net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+
