@@ -1,9 +1,9 @@
 import type { UserRole } from "./types";
 
-// Always call same-origin "/api" so it works both:
-// - dev: Vite proxy /api -> http://localhost:8080
-// - prod: nginx reverse proxy /api -> backend
-const API_BASE = "/api";
+// Base URL for backend API.
+// - If `VITE_API_BASE` is set (recommended for production), frontend will call backend directly.
+// - Otherwise fallback to "/api" (for setups that proxy `/api` -> backend on the same domain).
+const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string | undefined) ?? "/api";
 
 // Simple in-memory caching to reduce repeated network calls in UI.
 // This improves perceived speed (especially when opening dialogs/screens repeatedly).
