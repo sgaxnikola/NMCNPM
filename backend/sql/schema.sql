@@ -1,0 +1,60 @@
+CREATE DATABASE IF NOT EXISTS bluemoon CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE bluemoon;
+
+CREATE TABLE IF NOT EXISTS ho_khau (
+  MaHo INT AUTO_INCREMENT PRIMARY KEY,
+  SoThanhVien INT,
+  DiaChi VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS nhan_khau (
+  Id INT AUTO_INCREMENT PRIMARY KEY,
+  MaHo INT NULL,
+  HoTen VARCHAR(100) NOT NULL,
+  NgaySinh DATE NULL,
+  GioiTinh VARCHAR(10) NULL,
+  CCCD VARCHAR(20) NULL,
+  QuanHeVoiChuHo VARCHAR(30) NULL,
+  CONSTRAINT fk_nhankhau_hokhau FOREIGN KEY (MaHo) REFERENCES ho_khau(MaHo)
+);
+
+CREATE TABLE IF NOT EXISTS khoan_thu (
+  MaKhoanThu INT AUTO_INCREMENT PRIMARY KEY,
+  TenKhoanThu VARCHAR(100) NOT NULL,
+  SoTien DOUBLE,
+  LoaiKhoanThu INT
+);
+
+CREATE TABLE IF NOT EXISTS nop_tien (
+  IDNopTien INT AUTO_INCREMENT PRIMARY KEY,
+  MaKhoanThu INT,
+  MaHo INT,
+  NgayThu DATE,
+  SoTien DOUBLE,
+  NguoiNop VARCHAR(100),
+  CONSTRAINT fk_noptien_khoanthu FOREIGN KEY (MaKhoanThu) REFERENCES khoan_thu(MaKhoanThu),
+  CONSTRAINT fk_noptien_hokhau FOREIGN KEY (MaHo) REFERENCES ho_khau(MaHo)
+);
+
+CREATE TABLE IF NOT EXISTS bien_dong_dan_cu (
+  Id INT AUTO_INCREMENT PRIMARY KEY,
+  MaHo BIGINT NULL,
+  LoaiSuKien VARCHAR(20) NOT NULL,
+  HoTen VARCHAR(100),
+  CanHo VARCHAR(50),
+  Ngay DATE NOT NULL,
+  LyDo VARCHAR(255),
+  CONSTRAINT fk_biendong_hokhau FOREIGN KEY (MaHo) REFERENCES ho_khau(ma_ho)
+);
+
+CREATE TABLE IF NOT EXISTS tam_tru_tam_vang (
+  Id INT AUTO_INCREMENT PRIMARY KEY,
+  MaHo BIGINT NULL,
+  Loai VARCHAR(20) NOT NULL,
+  HoTen VARCHAR(100),
+  TuNgay DATE NOT NULL,
+  DenNgay DATE NULL,
+  GhiChu VARCHAR(255),
+  CONSTRAINT fk_tamtru_hokhau FOREIGN KEY (MaHo) REFERENCES ho_khau(ma_ho)
+);
+
