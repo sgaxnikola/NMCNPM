@@ -17,8 +17,8 @@ public class CollectionRound {
     @Column(name = "ten_dot", length = 120, nullable = false)
     private String name;
 
-    /** Optional period label, e.g. "2026-03" */
-    @Column(name = "ky_thu", length = 20)
+    /** Optional period label, e.g. "2026-03" or "yyyy-MM-dd~yyyy-MM-dd" */
+    @Column(name = "ky_thu", length = 64)
     private String period;
 
     @Column(name = "han_nop", length = 20)

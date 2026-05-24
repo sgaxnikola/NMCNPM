@@ -13,7 +13,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/population-events")
-@CrossOrigin(origins = "*")
 public class PopulationEventController {
 
     private final PopulationEventRepository repository;

@@ -16,4 +16,13 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("message", ex.getMessage() != null ? ex.getMessage() : "Dữ liệu không hợp lệ"));
     }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, String>> handleAny(Exception ex) {
+        String msg = ex.getMessage();
+        if (msg == null || msg.isBlank()) msg = ex.getClass().getSimpleName();
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("message", msg));
+    }
 }

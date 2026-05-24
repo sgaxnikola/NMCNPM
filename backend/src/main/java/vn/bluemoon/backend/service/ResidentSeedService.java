@@ -71,9 +71,9 @@ public class ResidentSeedService {
         long tempCount = 0;
         long eventCount = 0;
 
-        // Apartment codes matching FE: block A, floors 1..30, rooms 01..10
+        // Apartment codes matching FE: block A, floors 5..30 are residential (1..4 are shophouse/commercial)
         String block = "A";
-        for (int floor = 1; floor <= 30; floor++) {
+        for (int floor = 5; floor <= 30; floor++) {
             String floorStr = String.format("%02d", floor);
             for (int room = 1; room <= 10; room++) {
                 String roomStr = String.format("%02d", room);

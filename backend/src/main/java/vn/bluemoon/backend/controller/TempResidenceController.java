@@ -12,7 +12,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/temp-residence")
-@CrossOrigin(origins = "*")
 public class TempResidenceController {
 
     private final TempResidenceRepository repository;

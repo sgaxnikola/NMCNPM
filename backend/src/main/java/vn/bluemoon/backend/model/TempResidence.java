@@ -1,5 +1,6 @@
 package vn.bluemoon.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.time.LocalDate;
@@ -15,6 +16,7 @@ public class TempResidence {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "ma_ho")
+    @JsonIgnore
     private Household household;
 
     @Column(name = "loai", length = 20, nullable = false)

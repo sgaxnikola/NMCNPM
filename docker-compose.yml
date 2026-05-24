@@ -7,6 +7,11 @@ services:
       MYSQL_DATABASE: bluemoon
       MYSQL_USER: bluemoon_app
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/sql/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
@@ -18,14 +23,21 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: bluemoon-api
+    restart: on-failure
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'echo > /dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     networks:
       - bluemoon_net
 
@@ -35,7 +47,8 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: bluemoon-web
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "80:80"
     networks:

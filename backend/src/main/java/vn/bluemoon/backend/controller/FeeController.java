@@ -1,40 +1,48 @@
 package vn.bluemoon.backend.controller;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
-import vn.bluemoon.backend.model.Fee;
-import vn.bluemoon.backend.model.FeeObligation;
-import vn.bluemoon.backend.repository.FeeRepository;
-import vn.bluemoon.backend.repository.FeeObligationRepository;
-import vn.bluemoon.backend.repository.HouseholdRepository;
-import vn.bluemoon.backend.repository.PaymentRepository;
-import vn.bluemoon.backend.model.Household;
-import vn.bluemoon.backend.model.Payment;
+import vn.bluemoon.backend.model.*;
+import vn.bluemoon.backend.repository.*;
+import vn.bluemoon.backend.util.FeeExpectedAmounts;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/fees")
-@CrossOrigin(origins = "*")
 public class FeeController {
 
     private final FeeRepository feeRepository;
     private final HouseholdRepository householdRepository;
+    private final ResidentRepository residentRepository;
     private final FeeObligationRepository feeObligationRepository;
     private final PaymentRepository paymentRepository;
+    private final CollectionRoundRepository collectionRoundRepository;
+    private final RoundObligationRepository roundObligationRepository;
+    private final VehicleRepository vehicleRepository;
 
     public FeeController(
             FeeRepository feeRepository,
             HouseholdRepository householdRepository,
+            ResidentRepository residentRepository,
             FeeObligationRepository feeObligationRepository,
-            PaymentRepository paymentRepository
+            PaymentRepository paymentRepository,
+            CollectionRoundRepository collectionRoundRepository,
+            RoundObligationRepository roundObligationRepository,
+            VehicleRepository vehicleRepository
     ) {
         this.feeRepository = feeRepository;
         this.householdRepository = householdRepository;
+        this.residentRepository = residentRepository;
         this.feeObligationRepository = feeObligationRepository;
         this.paymentRepository = paymentRepository;
+        this.collectionRoundRepository = collectionRoundRepository;
+        this.roundObligationRepository = roundObligationRepository;
+        this.vehicleRepository = vehicleRepository;
     }
 
     @GetMapping
@@ -42,25 +50,58 @@ public class FeeController {
         return feeRepository.findAll();
     }
 
+    public record FeeRequest(
+        String name, Double amount, Integer type, String chargeType, String deadline,
+        String frequency, String startDate, String endDate,
+        Double vehicleRateMotorcycle, Double vehicleRateCar, Double vehicleRateBicycle
+    ) {}
+
     @PostMapping
-    public ResponseEntity<Fee> create(@RequestBody Fee fee) {
-        if (fee.getType() == null) {
-            fee.setType(0);
+    public ResponseEntity<Fee> create(@RequestBody FeeRequest body) {
+        Fee fee = new Fee();
+        fee.setName(body.name());
+        fee.setAmount(body.amount());
+        fee.setType(body.type() != null ? body.type() : 0);
+        fee.setChargeType(body.chargeType());
+        fee.setDeadline(body.deadline());
+
+        // Frequency defaults: mandatory → monthly, voluntary → one_time
+        String freq = body.frequency();
+        if (freq == null || freq.isBlank()) {
+            freq = (fee.getType() == 0) ? "monthly" : "one_time";
         }
+        fee.setFrequency(freq);
+
+        if (body.startDate() != null && !body.startDate().isBlank()) {
+            fee.setStartDate(LocalDate.parse(body.startDate()));
+        }
+        if (body.endDate() != null && !body.endDate().isBlank()) {
+            fee.setEndDate(LocalDate.parse(body.endDate()));
+        }
+        applyVehicleRates(fee, body);
+
         Fee saved = feeRepository.save(fee);
         upsertObligationsForFee(saved);
         return ResponseEntity.ok(saved);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Fee> update(@PathVariable Long id, @RequestBody Fee body) {
+    public ResponseEntity<Fee> update(@PathVariable Long id, @RequestBody FeeRequest body) {
         Fee existing = feeRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Khoản thu không tồn tại"));
-        if (body.getName() != null) existing.setName(body.getName());
-        if (body.getAmount() != null) existing.setAmount(body.getAmount());
-        if (body.getType() != null) existing.setType(body.getType());
-        if (body.getChargeType() != null) existing.setChargeType(body.getChargeType());
-        if (body.getDeadline() != null) existing.setDeadline(body.getDeadline());
+        if (body.name() != null) existing.setName(body.name());
+        if (body.amount() != null) existing.setAmount(body.amount());
+        if (body.type() != null) existing.setType(body.type());
+        if (body.chargeType() != null) existing.setChargeType(body.chargeType());
+        if (body.deadline() != null) existing.setDeadline(body.deadline());
+        if (body.frequency() != null) existing.setFrequency(body.frequency());
+        if (body.startDate() != null && !body.startDate().isBlank()) {
+            existing.setStartDate(LocalDate.parse(body.startDate()));
+        }
+        if (body.endDate() != null && !body.endDate().isBlank()) {
+            existing.setEndDate(LocalDate.parse(body.endDate()));
+        }
+        applyVehicleRates(existing, body);
         Fee saved = feeRepository.save(existing);
         upsertObligationsForFee(saved);
         return ResponseEntity.ok(saved);
@@ -86,6 +127,13 @@ public class FeeController {
         upsertObligationsForFee(fee);
 
         List<Household> households = householdRepository.findAll();
+        // Populate transient headName so UI can display it consistently
+        for (Household h : households) {
+            Resident head = residentRepository.findFirstByHousehold_IdAndRelationToHeadIgnoreCase(h.getId(), "Chủ hộ");
+            if (head != null) {
+                h.setHeadName(head.getFullName());
+            }
+        }
         List<Payment> feePayments = paymentRepository.findByFeeIdWithFee(id);
 
         Map<Long, Double> paidByHousehold = feePayments.stream()
@@ -115,25 +163,49 @@ public class FeeController {
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         if (!feeRepository.existsById(id)) {
             throw new IllegalArgumentException("Khoản thu không tồn tại");
         }
+        // Xóa payments liên quan trước
+        paymentRepository.deleteByFeeId(id);
+        // Xóa round obligations và collection rounds
+        List<CollectionRound> rounds = collectionRoundRepository.findByFeeIdOrderByNewest(id);
+        for (CollectionRound round : rounds) {
+            roundObligationRepository.deleteByRoundId(round.getId());
+        }
+        collectionRoundRepository.deleteByFeeId(id);
+        // Xóa fee obligations
         feeObligationRepository.deleteByFeeId(id);
         feeRepository.deleteById(id);
         return ResponseEntity.noContent().build();
     }
 
+    private static void applyVehicleRates(Fee fee, FeeRequest body) {
+        String ct = fee.getChargeType();
+        if (ct == null || !"per_vehicle".equalsIgnoreCase(ct)) {
+            fee.setVehicleRateMotorcycle(null);
+            fee.setVehicleRateCar(null);
+            fee.setVehicleRateBicycle(null);
+            return;
+        }
+        fee.setVehicleRateMotorcycle(body.vehicleRateMotorcycle());
+        fee.setVehicleRateCar(body.vehicleRateCar());
+        fee.setVehicleRateBicycle(body.vehicleRateBicycle());
+    }
+
     private void upsertObligationsForFee(Fee fee) {
         if (fee.getId() == null) return;
         List<Household> households = householdRepository.findAll();
-        double amountPerUnit = fee.getAmount() == null ? 0.0 : fee.getAmount();
-        boolean perResident = "per_resident".equalsIgnoreCase(fee.getChargeType());
+        Map<Long, List<Vehicle>> vehiclesByHousehold = vehicleRepository.findAll().stream()
+                .filter(v -> v.getHousehold() != null && v.getHousehold().getId() != null)
+                .collect(Collectors.groupingBy(v -> v.getHousehold().getId()));
 
         for (Household h : households) {
             long householdId = h.getId();
-            int members = h.getMembers() == null ? 0 : h.getMembers();
-            double expected = amountPerUnit * (perResident ? Math.max(0, members) : 1);
+            List<Vehicle> vs = vehiclesByHousehold.getOrDefault(householdId, List.of());
+            double expected = FeeExpectedAmounts.expectedForHousehold(fee, h, vs);
 
             FeeObligation o = feeObligationRepository
                     .findByFeeIdAndHouseholdId(fee.getId(), householdId)

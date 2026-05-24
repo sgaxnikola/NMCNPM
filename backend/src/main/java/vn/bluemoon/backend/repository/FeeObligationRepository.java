@@ -1,7 +1,8 @@
 package vn.bluemoon.backend.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
 import vn.bluemoon.backend.model.FeeObligation;
 
 import java.util.List;
@@ -12,9 +13,8 @@ public interface FeeObligationRepository extends JpaRepository<FeeObligation, Lo
 
     Optional<FeeObligation> findByFeeIdAndHouseholdId(Long feeId, Long householdId);
 
+    @Modifying
+    @Transactional
     void deleteByFeeId(Long feeId);
-
-    @Query("SELECT o FROM FeeObligation o WHERE o.feeId = :feeId AND o.expectedAmount > 0")
-    List<FeeObligation> findPositiveByFeeId(Long feeId);
 }
 

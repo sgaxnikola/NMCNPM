@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search, Plus, Pencil, Trash2, X, Users, Save } from "lucide-react";
+import { Search, Plus, Pencil, Trash2, X, Users, Save, Download } from "lucide-react";
 import { toast } from "sonner";
 import type { Household, Resident } from "../types";
+import { DatePickerInput } from "./shared/DatePickerInput";
 import {
   createHousehold,
   createResident,
@@ -19,6 +20,7 @@ import {
   deleteVehicle,
   fetchVehicles,
 } from "../api";
+import { downloadHouseholdRegistryExcel } from "../utils/exportHouseholdExcel";
 
 type PopulationEventType = "in" | "out";
 
@@ -52,6 +54,47 @@ interface VehicleItem {
   note: string | null;
 }
 
+const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
+  motorcycle: "Xe máy",
+  car: "Ô tô",
+  bicycle: "Xe đạp",
+};
+
+/** Gộp loại + biển số + ghi chú thêm cho trường vehicleInfo trên nhân khẩu. */
+function buildResidentVehicleInfo(type: VehicleType, plate: string, extraNote: string): string | undefined {
+  const p = plate.trim();
+  const extra = extraNote.trim();
+  const label = VEHICLE_TYPE_LABELS[type];
+  if (type === "bicycle") {
+    if (!p && !extra) return undefined;
+    const main = p ? `${label} (${p})` : label;
+    return extra ? `${main} — ${extra}` : main;
+  }
+  if (!p) return undefined;
+  const main = `${label} ${p}`;
+  return extra ? `${main} — ${extra}` : main;
+}
+
+/** Đoán loại/biển/ghi chú khi mở sửa nhân khẩu (dữ liệu cũ dạng tự do). */
+function parseResidentVehicleInfo(raw: string | null | undefined): {
+  type: VehicleType;
+  plate: string;
+  extra: string;
+} {
+  const s = (raw ?? "").trim();
+  if (!s) return { type: "motorcycle", plate: "", extra: "" };
+  let type: VehicleType = "motorcycle";
+  if (/ô\s*tô/i.test(s)) type = "car";
+  else if (/xe\s*đạp|xe dap/i.test(s)) type = "bicycle";
+  const plateMatch = s.match(
+    /\b(\d{2}[A-ZĐa-z][-\s]?\d{3}\.[\d.]+|\d{2}[A-ZĐa-z]-[\d.]+|\d{2}[A-ZĐa-z]\d{3}\.\d{2,})\b/i
+  );
+  const plate = plateMatch ? plateMatch[1].replace(/\s/g, "") : "";
+  const segs = s.split("—");
+  const extra = segs.length > 1 ? segs.slice(1).join("—").trim() : "";
+  return { type, plate, extra };
+}
+
 function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
   const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
   return norm(a) === norm(b);
@@ -64,6 +107,7 @@ export function ResidentScreen() {
   const [households, setHouseholds] = useState<Household[]>([]);
   const [residents, setResidents] = useState<Resident[]>([]);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [events, setEvents] = useState<PopulationEvent[]>([]);
   const [tempRecords, setTempRecords] = useState<TempRecord[]>([]);
@@ -72,10 +116,13 @@ export function ResidentScreen() {
   const [vehicleType, setVehicleType] = useState<VehicleType>("motorcycle");
   const [vehiclePlate, setVehiclePlate] = useState("");
   const [vehicleNote, setVehicleNote] = useState("");
+  const [vehicleOwnerResidentId, setVehicleOwnerResidentId] = useState<string>("");
 
   const [showTempModal, setShowTempModal] = useState(false);
   const [tempType, setTempType] = useState<TempStatusType>("temporary_in");
-  const [tempName, setTempName] = useState("");
+  /** id nhân khẩu, "" = chưa chọn, "__other__" = nhập tay */
+  const [tempResidentId, setTempResidentId] = useState<string>("");
+  const [tempOtherName, setTempOtherName] = useState("");
   const [tempFromDate, setTempFromDate] = useState("");
   const [tempToDate, setTempToDate] = useState("");
   const [tempNote, setTempNote] = useState("");
@@ -89,7 +136,9 @@ export function ResidentScreen() {
   const [hCccd, setHCccd] = useState("");
   const [hPhone, setHPhone] = useState("");
   const [hEmail, setHEmail] = useState("");
-  const [hVehicleInfo, setHVehicleInfo] = useState("");
+  const [hVType, setHVType] = useState<VehicleType>("motorcycle");
+  const [hVPlate, setHVPlate] = useState("");
+  const [hVExtra, setHVExtra] = useState("");
 
   const [showAddResident, setShowAddResident] = useState(false);
   const [rFullName, setRFullName] = useState("");
@@ -99,7 +148,9 @@ export function ResidentScreen() {
   const [rRelation, setRRelation] = useState("Thành viên");
   const [rPhone, setRPhone] = useState("");
   const [rEmail, setREmail] = useState("");
-  const [rVehicleInfo, setRVehicleInfo] = useState("");
+  const [rVType, setRVType] = useState<VehicleType>("motorcycle");
+  const [rVPlate, setRVPlate] = useState("");
+  const [rVExtra, setRVExtra] = useState("");
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Household | null>(null);
@@ -115,7 +166,9 @@ export function ResidentScreen() {
   const [erCccd, setErCccd] = useState("");
   const [erPhone, setErPhone] = useState("");
   const [erEmail, setErEmail] = useState("");
-  const [erVehicleInfo, setErVehicleInfo] = useState("");
+  const [erVType, setErVType] = useState<VehicleType>("motorcycle");
+  const [erVPlate, setErVPlate] = useState("");
+  const [erVExtra, setErVExtra] = useState("");
 
   const refresh = async () => {
     setLoading(true);
@@ -144,8 +197,10 @@ export function ResidentScreen() {
       setEvents([]);
       setTempRecords([]);
       setVehicles([]);
+      setVehicleOwnerResidentId("");
       return;
     }
+    setVehicleOwnerResidentId("");
     fetchResidents(selectedId)
       .then((list: any[]) =>
         setResidents((list ?? []).map((r) => ({
@@ -235,6 +290,41 @@ export function ResidentScreen() {
     [selected, tempRecords]
   );
 
+  const handleExportExcel = async () => {
+    if (filtered.length === 0) {
+      toast.error("Không có dữ liệu để xuất");
+      return;
+    }
+    setExporting(true);
+    try {
+      const allResidents = await fetchResidents();
+      const mapped = (allResidents ?? []).map((r: any) => ({
+        id: r.id,
+        householdId: r.household?.id ?? r.householdId,
+        household: r.household,
+        fullName: r.fullName,
+        dob: r.dob ?? null,
+        gender: r.gender ?? null,
+        cccd: r.cccd ?? null,
+        relationToHead: r.relationToHead ?? null,
+        phone: r.phone ?? null,
+        email: r.email ?? null,
+        vehicleInfo: r.vehicleInfo ?? null,
+      }));
+      const ids = new Set(filtered.map((h) => h.id));
+      const residentsFiltered = mapped.filter((r) => {
+        const hid = r.householdId ?? r.household?.id;
+        return hid != null && ids.has(Number(hid));
+      });
+      await downloadHouseholdRegistryExcel(filtered, residentsFiltered);
+      toast.success("Đã tải file Excel");
+    } catch (e: any) {
+      toast.error("Không xuất được Excel", { description: e?.message });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const historyItems = useMemo(() => {
     if (!selected) return [];
     const items: Array<{ date: string; label: string; detail: string }> = [];
@@ -260,9 +350,9 @@ export function ResidentScreen() {
   }, [selected, selectedEvents, selectedTempRecords]);
 
   return (
-    <div className="flex-1 flex flex-col min-h-screen overflow-auto" style={{ background: "#F2F2FD" }}>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-transparent">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+      <div className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm">
         <h1 className="text-xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>Quản lý hộ khẩu</h1>
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -276,6 +366,17 @@ export function ResidentScreen() {
             />
           </div>
           <button
+            type="button"
+            disabled={exporting || filtered.length === 0}
+            onClick={handleExportExcel}
+            className="flex items-center gap-2 rounded-md border px-4 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ borderColor: "#CFCFEF", color: "#1A1A2E", fontWeight: 500 }}
+            title="Xuất theo bộ lọc tìm kiếm hiện tại (nếu ô trống = toàn bộ)"
+          >
+            <Download size={16} style={{ color: "#6F6AF8" }} />
+            {exporting ? "Đang xuất…" : "Xuất Excel"}
+          </button>
+          <button
             onClick={() => setShowAddHousehold(true)}
             className="flex items-center gap-2 px-4 py-2 text-white rounded-md text-sm"
             style={{ background: "#6F6AF8", borderRadius: 6, fontWeight: 500 }}
@@ -286,9 +387,7 @@ export function ResidentScreen() {
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="flex gap-4 h-full">
-          {/* Table */}
-          <div className={`bg-white rounded-lg border overflow-auto ${selected ? "flex-1" : "w-full"}`} style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+        <div className="bm-table w-full overflow-auto">
             <table className="w-full">
               <thead>
                 <tr style={{ background: "#F2F2FD" }}>
@@ -310,7 +409,7 @@ export function ResidentScreen() {
                     key={row.id}
                     className="border-t cursor-pointer transition-colors"
                     style={{
-                      borderColor: "#F2F2FD",
+                      borderColor: "#EEF0FB",
                       background: selectedId === row.id ? "#6F6AF810" : i % 2 === 1 ? "#FAFAFF" : "#fff",
                     }}
                     onClick={() => setSelectedId(selectedId === row.id ? null : row.id)}
@@ -349,20 +448,36 @@ export function ResidentScreen() {
                 ))}
               </tbody>
             </table>
-          </div>
+        </div>
+      </div>
 
-          {/* Detail Panel */}
-          {selected && (
-            <div className="w-[420px] min-w-[420px] bg-white rounded-lg border overflow-auto" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
-              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: "#CFCFEF", background: "#F2F2FD" }}>
-                <h3 className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>Chi tiết hộ khẩu</h3>
-                <button onClick={() => setSelectedId(null)} className="p-1 rounded hover:bg-gray-200">
-                  <X size={16} style={{ color: "#717182" }} />
+      {/* Chi tiết hộ — modal giữa màn hình */}
+      {selected && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setSelectedId(null)} aria-hidden />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="household-detail-title"
+            className="relative bm-card flex h-[min(85vh,760px)] w-full max-w-4xl flex-col overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+              <div className="bm-header flex shrink-0 items-center justify-between px-5 py-4">
+                <h3 id="household-detail-title" className="text-base" style={{ fontWeight: 700, color: "#1A1A2E" }}>
+                  Chi tiết hộ khẩu
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(null)}
+                  className="rounded p-1 hover:bg-gray-100"
+                  aria-label="Đóng"
+                >
+                  <X size={18} style={{ color: "#717182" }} />
                 </button>
               </div>
 
               {/* Info */}
-              <div className="px-4 py-3 space-y-2 border-b" style={{ borderColor: "#CFCFEF" }}>
+              <div className="px-4 py-3 space-y-2 border-b" style={{ borderColor: "#E2E4F0" }}>
                 <div className="flex justify-between text-sm">
                   <span style={{ color: "#717182" }}>Mã hộ:</span>
                   <span style={{ color: "#1A1A2E", fontWeight: 500 }}>HK{selected.id}</span>
@@ -378,7 +493,7 @@ export function ResidentScreen() {
               </div>
 
               {/* Tabs */}
-              <div className="flex border-b" style={{ borderColor: "#CFCFEF" }}>
+              <div className="flex border-b" style={{ borderColor: "#E2E4F0" }}>
                 {[
                   { id: "members", label: "Nhân khẩu" },
                   { id: "vehicles", label: "Phương tiện" },
@@ -400,12 +515,13 @@ export function ResidentScreen() {
                 ))}
               </div>
 
+              <div className="min-h-0 flex-1 basis-0 overflow-y-auto overflow-x-auto">
               {/* Members Table */}
               {activeTab === "members" && (
-                <div className="overflow-auto">
+              <div>
                   <table className="w-full">
                     <thead>
-                      <tr style={{ background: "#F2F2FD" }}>
+                    <tr style={{ background: "#EEF0FB" }}>
                         {["Họ tên", "Ngày sinh", "GT", "CCCD", "SĐT", "Email", "Quan hệ", ""].map((h) => (
                           <th key={h} className="text-left px-3 py-2 text-xs" style={{ fontWeight: 600, color: "#1A1A2E" }}>{h}</th>
                         ))}
@@ -413,7 +529,7 @@ export function ResidentScreen() {
                     </thead>
                     <tbody>
                       {residents.map((m) => (
-                        <tr key={m.id} className="border-t" style={{ borderColor: "#F2F2FD" }}>
+                      <tr key={m.id} className="border-t" style={{ borderColor: "#EEF0FB" }}>
                           <td className="px-3 py-2 text-xs" style={{ color: "#1A1A2E", fontWeight: 500 }}>{m.fullName}</td>
                           <td className="px-3 py-2 text-xs" style={{ color: "#717182" }}>{m.dob ?? "—"}</td>
                           <td className="px-3 py-2 text-xs" style={{ color: "#717182" }}>{m.gender ?? "—"}</td>
@@ -440,7 +556,12 @@ export function ResidentScreen() {
                                 setErCccd(m.cccd ?? "");
                                 setErPhone(m.phone ?? "");
                                 setErEmail(m.email ?? "");
-                                setErVehicleInfo(m.vehicleInfo ?? "");
+                                {
+                                  const v = parseResidentVehicleInfo(m.vehicleInfo);
+                                  setErVType(v.type);
+                                  setErVPlate(v.plate);
+                                  setErVExtra(v.extra);
+                                }
                                 setShowEditResident(true);
                               }}
                               className="px-2 py-1 rounded text-[11px] mr-1"
@@ -501,7 +622,7 @@ export function ResidentScreen() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
                       <label className="block text-xs mb-1" style={{ color: "#717182", fontWeight: 500 }}>
                         Loại phương tiện
@@ -532,6 +653,25 @@ export function ResidentScreen() {
                     </div>
                     <div>
                       <label className="block text-xs mb-1" style={{ color: "#717182", fontWeight: 500 }}>
+                        Thành viên sở hữu (tuỳ chọn)
+                      </label>
+                      <select
+                        value={vehicleOwnerResidentId}
+                        onChange={(e) => setVehicleOwnerResidentId(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md text-sm"
+                        style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                      >
+                        <option value="">— Chọn trong hộ —</option>
+                        {residents.map((r) => (
+                          <option key={r.id} value={String(r.id)}>
+                            {r.fullName}
+                            {r.relationToHead ? ` (${r.relationToHead})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: "#717182", fontWeight: 500 }}>
                         Ghi chú
                       </label>
                       <input
@@ -553,11 +693,18 @@ export function ResidentScreen() {
                           return;
                         }
                         try {
+                          const owner = vehicleOwnerResidentId
+                            ? residents.find((r) => String(r.id) === vehicleOwnerResidentId)
+                            : undefined;
+                          const ownerLine = owner ? `Sở hữu: ${owner.fullName}` : "";
+                          const userNote = vehicleNote.trim();
+                          const noteCombined =
+                            [ownerLine, userNote].filter(Boolean).join(". ") || undefined;
                           const saved = await createVehicle({
                             householdId: selected.id,
                             type: vehicleType,
                             plate: vehicleType === "bicycle" ? undefined : vehiclePlate.trim(),
-                            note: vehicleNote.trim() || undefined,
+                            note: noteCombined,
                           });
                           setVehicles((prev) => [
                             ...prev,
@@ -572,6 +719,7 @@ export function ResidentScreen() {
                           toast.success("Đã thêm phương tiện");
                           setVehiclePlate("");
                           setVehicleNote("");
+                          setVehicleOwnerResidentId("");
                         } catch (e: any) {
                           toast.error("Không thêm được phương tiện", { description: e?.message });
                         }
@@ -588,7 +736,7 @@ export function ResidentScreen() {
                       Chưa có phương tiện nào.
                     </div>
                   ) : (
-                    <div className="overflow-auto max-h-[260px]">
+                    <div>
                       <table className="w-full text-xs">
                         <thead>
                           <tr style={{ background: "#F2F2FD" }}>
@@ -640,7 +788,16 @@ export function ResidentScreen() {
                       Ghi nhận các lần <span style={{ fontWeight: 600 }}>tạm trú / tạm vắng</span> của hộ này.
                     </div>
                     <button
-                      onClick={() => setShowTempModal(true)}
+                      type="button"
+                      onClick={() => {
+                        setTempResidentId("");
+                        setTempOtherName("");
+                        setTempFromDate("");
+                        setTempToDate("");
+                        setTempNote("");
+                        setTempType("temporary_in");
+                        setShowTempModal(true);
+                      }}
                       className="px-3 py-1.5 rounded-md text-xs text-white"
                       style={{ background: "#6F6AF8", borderRadius: 6, fontWeight: 500 }}
                     >
@@ -652,7 +809,7 @@ export function ResidentScreen() {
                       Chưa có dữ liệu tạm trú / tạm vắng.
                     </div>
                   ) : (
-                    <div className="overflow-auto max-h-[260px]">
+                    <div>
                       <table className="w-full text-xs">
                         <thead>
                           <tr style={{ background: "#F2F2FD" }}>
@@ -698,7 +855,7 @@ export function ResidentScreen() {
                       Chưa có lịch sử thay đổi cho hộ này.
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-[260px] overflow-auto">
+                    <div className="space-y-2">
                       {historyItems.map((item, idx) => (
                         <div
                           key={`${item.date}-${idx}`}
@@ -719,8 +876,10 @@ export function ResidentScreen() {
                 </div>
               )}
 
+              </div>
+
               {/* Action Buttons */}
-              <div className="flex gap-2 px-4 py-3 border-t" style={{ borderColor: "#CFCFEF" }}>
+              <div className="flex shrink-0 gap-2 border-t px-4 py-3" style={{ borderColor: "#CFCFEF", background: "#fff" }}>
                 <button
                   onClick={() => setShowAddResident(true)}
                   className="flex items-center gap-1 px-3 py-1.5 text-white rounded text-xs"
@@ -747,10 +906,9 @@ export function ResidentScreen() {
                   <Pencil size={12} style={{ color: "#6F6AF8" }} /> Cập nhật
                 </button>
               </div>
-            </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Add Household Dialog */}
       {showAddHousehold && (
@@ -798,13 +956,7 @@ export function ResidentScreen() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Ngày sinh chủ hộ</label>
-                  <input
-                    value={hDob}
-                    onChange={(e) => setHDob(e.target.value)}
-                    type="date"
-                    className="w-full px-3 py-2 border rounded-md text-sm"
-                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                  />
+                  <DatePickerInput value={hDob} onChange={setHDob} placeholder="Chọn ngày" buttonClassName="px-3 py-2" />
                 </div>
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Giới tính chủ hộ</label>
@@ -821,7 +973,7 @@ export function ResidentScreen() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>CCCD chủ hộ</label>
+                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>CCCD</label>
                 <input
                   value={hCccd}
                   onChange={(e) => setHCccd(e.target.value)}
@@ -852,16 +1004,52 @@ export function ResidentScreen() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Phương tiện & biển số (chủ hộ)</label>
-                <textarea
-                  value={hVehicleInfo}
-                  onChange={(e) => setHVehicleInfo(e.target.value)}
-                  rows={2}
-                  placeholder="VD: Xe máy 29A-12345; Ô tô 30H-678.90"
-                  className="w-full px-3 py-2 border rounded-md text-sm"
-                  style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                />
+              <div className="space-y-2">
+                <span className="block text-sm" style={{ color: "#717182", fontWeight: 500 }}>
+                  Phương tiện chủ hộ (tùy chọn)
+                </span>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Loại phương tiện
+                    </label>
+                    <select
+                      value={hVType}
+                      onChange={(e) => setHVType(e.target.value as VehicleType)}
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    >
+                      <option value="motorcycle">Xe máy</option>
+                      <option value="car">Ô tô</option>
+                      <option value="bicycle">Xe đạp</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Biển số {hVType === "bicycle" ? "(tuỳ chọn)" : "(xe máy / ô tô)"}
+                    </label>
+                    <input
+                      value={hVPlate}
+                      onChange={(e) => setHVPlate(e.target.value)}
+                      disabled={hVType === "bicycle"}
+                      placeholder={hVType === "bicycle" ? "Xe đạp không bắt buộc" : "VD: 29A-12345"}
+                      className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                    Ghi chú thêm (tuỳ chọn)
+                  </label>
+                  <input
+                    value={hVExtra}
+                    onChange={(e) => setHVExtra(e.target.value)}
+                    placeholder="VD: Honda Vision..."
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  />
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: "#CFCFEF" }}>
@@ -883,6 +1071,15 @@ export function ResidentScreen() {
                     return;
                   }
                   try {
+                    if (
+                      (hVType === "motorcycle" || hVType === "car") &&
+                      !hVPlate.trim() &&
+                      hVExtra.trim()
+                    ) {
+                      toast.error("Xe máy / ô tô cần biển số khi có ghi chú thêm");
+                      return;
+                    }
+                    const headVehicleInfo = buildResidentVehicleInfo(hVType, hVPlate, hVExtra);
                     const created = await createHousehold({
                       address: newAddress.trim(),
                       members: Math.max(1, Number(newMembers || 1)),
@@ -900,7 +1097,7 @@ export function ResidentScreen() {
                         relationToHead: "Chủ hộ",
                         phone: hPhone || undefined,
                         email: hEmail || undefined,
-                        vehicleInfo: hVehicleInfo || undefined,
+                        vehicleInfo: headVehicleInfo,
                       });
                     } catch (e: any) {
                       toast.error("Không tạo được chủ hộ", { description: e?.message });
@@ -929,7 +1126,9 @@ export function ResidentScreen() {
                     setHCccd("");
                     setHPhone("");
                     setHEmail("");
-                    setHVehicleInfo("");
+                    setHVType("motorcycle");
+                    setHVPlate("");
+                    setHVExtra("");
                     refresh();
                   } catch (e: any) {
                     toast.error("Không tạo được hộ khẩu", { description: e?.message });
@@ -970,13 +1169,7 @@ export function ResidentScreen() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Ngày sinh</label>
-                  <input
-                    value={rDob}
-                    onChange={(e) => setRDob(e.target.value)}
-                    type="date"
-                    className="w-full px-3 py-2 border rounded-md text-sm"
-                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                  />
+                  <DatePickerInput value={rDob} onChange={setRDob} placeholder="Chọn ngày" buttonClassName="px-3 py-2" />
                 </div>
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Giới tính</label>
@@ -1024,16 +1217,52 @@ export function ResidentScreen() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Phương tiện & biển số</label>
-                <textarea
-                  value={rVehicleInfo}
-                  onChange={(e) => setRVehicleInfo(e.target.value)}
-                  rows={2}
-                  placeholder="VD: Xe máy 29A-12345; Ô tô 30H-678.90"
-                  className="w-full px-3 py-2 border rounded-md text-sm"
-                  style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                />
+              <div className="space-y-2">
+                <span className="block text-sm" style={{ color: "#717182", fontWeight: 500 }}>
+                  Phương tiện (tùy chọn)
+                </span>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Loại
+                    </label>
+                    <select
+                      value={rVType}
+                      onChange={(e) => setRVType(e.target.value as VehicleType)}
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    >
+                      <option value="motorcycle">Xe máy</option>
+                      <option value="car">Ô tô</option>
+                      <option value="bicycle">Xe đạp</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Biển số {rVType === "bicycle" ? "(tuỳ chọn)" : "(xe máy / ô tô)"}
+                    </label>
+                    <input
+                      value={rVPlate}
+                      onChange={(e) => setRVPlate(e.target.value)}
+                      disabled={rVType === "bicycle"}
+                      placeholder={rVType === "bicycle" ? "—" : "VD: 29A-12345"}
+                      className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                    Ghi chú thêm
+                  </label>
+                  <input
+                    value={rVExtra}
+                    onChange={(e) => setRVExtra(e.target.value)}
+                    placeholder="VD: nhãn hiệu, màu..."
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  />
+                </div>
               </div>
               <div>
                 <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Quan hệ với chủ hộ</label>
@@ -1060,7 +1289,16 @@ export function ResidentScreen() {
                     toast.error("Vui lòng nhập họ tên");
                     return;
                   }
+                  if (
+                    (rVType === "motorcycle" || rVType === "car") &&
+                    !rVPlate.trim() &&
+                    rVExtra.trim()
+                  ) {
+                    toast.error("Xe máy / ô tô cần biển số khi có ghi chú thêm");
+                    return;
+                  }
                   try {
+                    const rVehicle = buildResidentVehicleInfo(rVType, rVPlate, rVExtra);
                     await createResident({
                       householdId: selected.id,
                       fullName: rFullName.trim(),
@@ -1070,7 +1308,7 @@ export function ResidentScreen() {
                       relationToHead: rRelation || undefined,
                       phone: rPhone || undefined,
                       email: rEmail || undefined,
-                      vehicleInfo: rVehicleInfo || undefined,
+                      vehicleInfo: rVehicle,
                     });
                     toast.success("Đã thêm nhân khẩu");
                     setShowAddResident(false);
@@ -1081,7 +1319,9 @@ export function ResidentScreen() {
                     setRRelation("Thành viên");
                     setRPhone("");
                     setREmail("");
-                    setRVehicleInfo("");
+                    setRVType("motorcycle");
+                    setRVPlate("");
+                    setRVExtra("");
                     const list = await fetchResidents(selected.id);
                     setResidents((list ?? []).map((r: any) => ({
                       id: r.id,
@@ -1287,35 +1527,42 @@ export function ResidentScreen() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Họ tên</label>
-                <input
-                  value={tempName}
-                  onChange={(e) => setTempName(e.target.value)}
-                  placeholder="VD: Nguyễn Văn A"
+                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>
+                  Thành viên / người liên quan
+                </label>
+                <select
+                  value={tempResidentId}
+                  onChange={(e) => setTempResidentId(e.target.value)}
                   className="w-full px-3 py-2 border rounded-md text-sm"
                   style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                />
+                >
+                  <option value="">— Chọn nhân khẩu trong hộ —</option>
+                  {residents.map((r) => (
+                    <option key={r.id} value={String(r.id)}>
+                      {r.fullName}
+                      {r.relationToHead ? ` (${r.relationToHead})` : ""}
+                    </option>
+                  ))}
+                  <option value="__other__">Người ngoài hộ (nhập tay)</option>
+                </select>
+                {tempResidentId === "__other__" && (
+                  <input
+                    value={tempOtherName}
+                    onChange={(e) => setTempOtherName(e.target.value)}
+                    placeholder="Họ tên người tạm trú / tạm vắng"
+                    className="mt-2 w-full px-3 py-2 border rounded-md text-sm"
+                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  />
+                )}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Từ ngày</label>
-                  <input
-                    type="date"
-                    value={tempFromDate}
-                    onChange={(e) => setTempFromDate(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-md text-sm"
-                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                  />
+                  <DatePickerInput value={tempFromDate} onChange={setTempFromDate} placeholder="Chọn ngày" buttonClassName="px-3 py-2" />
                 </div>
                 <div>
                   <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Đến ngày (tùy chọn)</label>
-                  <input
-                    type="date"
-                    value={tempToDate}
-                    onChange={(e) => setTempToDate(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-md text-sm"
-                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                  />
+                  <DatePickerInput value={tempToDate} onChange={setTempToDate} placeholder="Chọn ngày" buttonClassName="px-3 py-2" />
                 </div>
               </div>
               <div>
@@ -1340,9 +1587,23 @@ export function ResidentScreen() {
               </button>
               <button
                 onClick={() => {
-                  if (!tempName.trim()) {
-                    toast.error("Vui lòng nhập họ tên");
+                  let resolvedName = "";
+                  if (tempResidentId === "__other__") {
+                    resolvedName = tempOtherName.trim();
+                    if (!resolvedName) {
+                      toast.error("Vui lòng nhập họ tên người ngoài hộ");
+                      return;
+                    }
+                  } else if (!tempResidentId) {
+                    toast.error("Vui lòng chọn nhân khẩu hoặc người ngoài hộ");
                     return;
+                  } else {
+                    const r = residents.find((x) => String(x.id) === tempResidentId);
+                    resolvedName = (r?.fullName ?? "").trim();
+                    if (!resolvedName) {
+                      toast.error("Không tìm thấy nhân khẩu đã chọn");
+                      return;
+                    }
                   }
                   if (!tempFromDate) {
                     toast.error("Vui lòng chọn ngày bắt đầu");
@@ -1352,7 +1613,7 @@ export function ResidentScreen() {
                   createTempResidence({
                     householdId: selected.id,
                     type: tempType,
-                    name: tempName.trim(),
+                    name: resolvedName,
                     fromDate: tempFromDate,
                     toDate: tempToDate || undefined,
                     note: tempNote.trim() || undefined,
@@ -1362,7 +1623,7 @@ export function ResidentScreen() {
                         id: String(saved.id ?? `${selected.id}-${Date.now()}`),
                         householdId: selected.id,
                         type: saved.type as TempStatusType,
-                        name: saved.name ?? tempName.trim(),
+                        name: saved.name ?? resolvedName,
                         fromDate: saved.fromDate ?? tempFromDate,
                         toDate: (saved.toDate ?? tempToDate) || undefined,
                         note: (saved.note ?? tempNote) || undefined,
@@ -1375,7 +1636,8 @@ export function ResidentScreen() {
                     })
                     .finally(() => {
                       setShowTempModal(false);
-                      setTempName("");
+                      setTempResidentId("");
+                      setTempOtherName("");
                       setTempFromDate("");
                       setTempToDate("");
                       setTempNote("");
@@ -1465,17 +1727,50 @@ export function ResidentScreen() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>
+              <div className="space-y-2">
+                <span className="block text-sm" style={{ color: "#717182", fontWeight: 500 }}>
                   Phương tiện
-                </label>
-                <textarea
-                  value={erVehicleInfo}
-                  onChange={(e) => setErVehicleInfo(e.target.value)}
-                  rows={2}
-                  className="w-full px-3 py-2 border rounded-md text-sm"
-                  style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                />
+                </span>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Loại
+                    </label>
+                    <select
+                      value={erVType}
+                      onChange={(e) => setErVType(e.target.value as VehicleType)}
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    >
+                      <option value="motorcycle">Xe máy</option>
+                      <option value="car">Ô tô</option>
+                      <option value="bicycle">Xe đạp</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                      Biển số {erVType === "bicycle" ? "(tuỳ chọn)" : "(xe máy / ô tô)"}
+                    </label>
+                    <input
+                      value={erVPlate}
+                      onChange={(e) => setErVPlate(e.target.value)}
+                      disabled={erVType === "bicycle"}
+                      className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                      style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs" style={{ color: "#717182" }}>
+                    Ghi chú thêm
+                  </label>
+                  <input
+                    value={erVExtra}
+                    onChange={(e) => setErVExtra(e.target.value)}
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  />
+                </div>
               </div>
             </div>
 
@@ -1498,12 +1793,21 @@ export function ResidentScreen() {
                     return;
                   }
                   try {
+                    if (
+                      (erVType === "motorcycle" || erVType === "car") &&
+                      !erVPlate.trim() &&
+                      erVExtra.trim()
+                    ) {
+                      toast.error("Xe máy / ô tô cần biển số khi có ghi chú thêm");
+                      return;
+                    }
+                    const nextVehicle = buildResidentVehicleInfo(erVType, erVPlate, erVExtra);
                     await updateResident(editingResident.id, {
                       fullName: erFullName.trim(),
                       cccd: erCccd.trim(),
                       phone: erPhone.trim(),
                       email: erEmail.trim(),
-                      vehicleInfo: erVehicleInfo.trim(),
+                      vehicleInfo: nextVehicle ?? "",
                     });
                     toast.success("Đã cập nhật nhân khẩu");
 

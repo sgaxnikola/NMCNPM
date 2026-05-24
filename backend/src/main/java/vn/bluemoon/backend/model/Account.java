@@ -23,6 +23,13 @@ public class Account {
     @Column(name = "role", length = 50)
     private String role;
 
+    /**
+     * Optional link from an account to a household (for resident portal).
+     * Uses the same household id as in other tables (ma_ho).
+     */
+    @Column(name = "ma_ho")
+    private Long householdId;
+
     public Long getId() {
         return id;
     }
@@ -61,6 +68,14 @@ public class Account {
 
     public void setRole(String role) {
         this.role = role;
+    }
+
+    public Long getHouseholdId() {
+        return householdId;
+    }
+
+    public void setHouseholdId(Long householdId) {
+        this.householdId = householdId;
     }
 }
 

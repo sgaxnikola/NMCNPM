@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Search, Pencil, Trash2, Eye, ChevronLeft, ChevronRight, Wallet, X, Users, CheckCircle2, Clock, AlertCircle, Mail, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import type { FeeItem, Payment, Household } from "../types";
+import { DatePickerInput } from "./shared/DatePickerInput";
 import {
   createRound,
   fetchFeeObligations,
@@ -22,7 +23,107 @@ const statusConfig = {
   expired: { bg: "#F4433615", color: "#F44336", label: "Hết hạn", icon: AlertCircle },
 };
 
-type ChargeType = "per_apartment" | "per_resident";
+type ChargeType = "per_apartment" | "per_resident" | "per_vehicle";
+type Frequency = "daily" | "weekly" | "monthly" | "yearly" | "one_time";
+
+const frequencyLabels: Record<string, string> = {
+  daily: "Hàng ngày",
+  weekly: "Hàng tuần",
+  monthly: "Hàng tháng",
+  yearly: "Hàng năm",
+  one_time: "Một lần",
+};
+
+function isRecurringFee(fee: FeeItem): boolean {
+  return !!fee.frequency && fee.frequency !== "one_time";
+}
+
+function digitsOnly(input: string): string {
+  return (input ?? "").replace(/\D/g, "");
+}
+
+function formatVndValue(value: string | number | null | undefined): string {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (n == null || !Number.isFinite(n)) return "0";
+  return Number(n).toLocaleString("vi-VN");
+}
+
+function formatDateVN(input: string | null | undefined): string {
+  if (!input) return "—";
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    const [, yyyy, mm, dd] = m;
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return input;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatVndDigits(digits: string): string {
+  const d = digitsOnly(digits);
+  if (!d) return "";
+  return Number(d).toLocaleString("vi-VN");
+}
+
+function isoDateToUTC(iso: string | null | undefined): Date | null {
+  if (!iso) return null;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [, yyyy, mm, dd] = m;
+  const y = Number(yyyy);
+  const mo = Number(mm) - 1;
+  const d = Number(dd);
+  const dt = new Date(Date.UTC(y, mo, d, 0, 0, 0));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+function utcToIsoDate(dt: Date): string {
+  return dt.toISOString().slice(0, 10);
+}
+
+function addByFrequencyUTC(dt: Date, frequency: string | undefined, k: number): Date {
+  const f = (frequency ?? "").toLowerCase();
+  const next = new Date(dt.getTime());
+  switch (f) {
+    case "daily":
+      next.setUTCDate(next.getUTCDate() + k);
+      return next;
+    case "weekly":
+      next.setUTCDate(next.getUTCDate() + k * 7);
+      return next;
+    case "monthly":
+      next.setUTCMonth(next.getUTCMonth() + k);
+      return next;
+    case "yearly":
+      next.setUTCFullYear(next.getUTCFullYear() + k);
+      return next;
+    default:
+      return next;
+  }
+}
+
+function parseRoundStartEnd(round: CollectionRound): { start: string; end: string } | null {
+  const period = round.period ?? "";
+  if (period.includes("~")) {
+    const [start, end] = period.split("~");
+    if (start && end) return { start, end };
+  }
+  if (round.deadline) return { start: round.deadline, end: round.deadline };
+  return null;
+}
+
+function formatRoundPeriodLabel(period: string | null | undefined): string {
+  if (!period) return "";
+  if (!period.includes("~")) return period;
+  const [start, end] = period.split("~");
+  if (!start || !end) return period;
+  return `${formatDateVN(start)} - ${formatDateVN(end)}`;
+}
 
 function EditFeeModal({
   fee,
@@ -31,34 +132,87 @@ function EditFeeModal({
 }: {
   fee: FeeItem;
   onClose: () => void;
-  onSave: (data: { name: string; amount: string; type: "mandatory" | "voluntary"; chargeType: ChargeType; deadline: string; note: string }) => void;
+  onSave: (data: {
+    name: string;
+    amount: string;
+    type: "mandatory" | "voluntary";
+    chargeType: ChargeType;
+    deadline: string;
+    note: string;
+    frequency: string;
+    startDate: string;
+    endDate: string;
+    vehicleRateMotorcycle?: number;
+    vehicleRateCar?: number;
+    vehicleRateBicycle?: number;
+  }) => void;
 }) {
   const [name, setName] = useState(fee.name);
-  const [amount, setAmount] = useState(fee.amount);
+  // Store digits only so UI can format "100000" => "100.000" while backend still receives a clean numeric string.
+  const [amount, setAmount] = useState(digitsOnly(fee.amount));
   const [feeType, setFeeType] = useState<"mandatory" | "voluntary">(fee.type);
-  const [chargeType, setChargeType] = useState<ChargeType>(fee.chargeType ?? "per_apartment");
+  const [chargeType, setChargeType] = useState<ChargeType>(
+    fee.chargeType === "per_resident"
+      ? "per_resident"
+      : fee.chargeType === "per_vehicle"
+        ? "per_vehicle"
+        : "per_apartment"
+  );
+  const [vMoto, setVMoto] = useState(digitsOnly(String(fee.vehicleRateMotorcycle ?? 0)));
+  const [vCar, setVCar] = useState(digitsOnly(String(fee.vehicleRateCar ?? 0)));
+  const [vBike, setVBike] = useState(digitsOnly(String(fee.vehicleRateBicycle ?? 0)));
+  const [frequency, setFrequency] = useState<string>(fee.frequency ?? "one_time");
   const [deadline, setDeadline] = useState(fee.deadline);
+  const [startDate, setStartDate] = useState(fee.startDate ?? "");
+  const [endDate, setEndDate] = useState(fee.endDate ?? "");
   const [note, setNote] = useState(fee.note);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const isRecurring = frequency !== "one_time";
 
   const validate = () => {
     const e: Record<string, string> = {};
     if (!name.trim()) e.name = "Vui lòng nhập tên khoản thu";
-    if (feeType === "mandatory" && (!amount || Number(amount) <= 0)) e.amount = "Vui lòng nhập số tiền hợp lệ";
-    if (!deadline) e.deadline = "Vui lòng chọn hạn thanh toán";
+    if (feeType === "mandatory") {
+      if (chargeType === "per_vehicle") {
+        const s = Number(vMoto || "0") + Number(vCar || "0") + Number(vBike || "0");
+        if (s <= 0) e.amount = "Nhập ít nhất một mức thu theo loại xe";
+      } else if (!amount || Number(amount) <= 0) {
+        e.amount = "Vui lòng nhập số tiền hợp lệ";
+      }
+    }
+    if (!isRecurring && !deadline) e.deadline = "Vui lòng chọn hạn thanh toán";
+    if (isRecurring) {
+      if (!startDate) e.startDate = "Vui lòng chọn ngày bắt đầu";
+      if (!endDate) e.endDate = "Vui lòng chọn ngày kết thúc";
+      if (startDate && endDate && startDate >= endDate) e.endDate = "Ngày kết thúc phải sau ngày bắt đầu";
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
   const handleSubmit = () => {
     if (!validate()) return;
-    onSave({ name: name.trim(), amount, type: feeType, chargeType, deadline, note });
+    onSave({
+      name: name.trim(),
+      amount: chargeType === "per_vehicle" ? "0" : amount,
+      type: feeType,
+      chargeType,
+      deadline: isRecurring ? endDate : deadline,
+      note,
+      frequency,
+      startDate,
+      endDate,
+      vehicleRateMotorcycle: chargeType === "per_vehicle" ? Number(vMoto || "0") : undefined,
+      vehicleRateCar: chargeType === "per_vehicle" ? Number(vCar || "0") : undefined,
+      vehicleRateBicycle: chargeType === "per_vehicle" ? Number(vBike || "0") : undefined,
+    });
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4" style={{ borderRadius: 8 }}>
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" style={{ borderRadius: 8 }}>
         <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "#CFCFEF" }}>
           <h2 className="text-lg" style={{ fontWeight: 700, color: "#1A1A2E" }}>Chỉnh sửa khoản thu</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100" aria-label="Đóng">
@@ -80,16 +234,46 @@ function EditFeeModal({
               ))}
             </div>
           </div>
+          {/* One-time vs Recurring */}
+          <div>
+            <label className="block text-sm mb-2" style={{ fontWeight: 500, color: "#1A1A2E" }}>Hình thức thu</label>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setFrequency("one_time")} className="flex-1 px-3 py-2.5 rounded-md text-sm transition-all" style={{ background: !isRecurring ? "#6F6AF8" : "#F2F2FD", color: !isRecurring ? "#fff" : "#1A1A2E", fontWeight: !isRecurring ? 600 : 400, border: `1.5px solid ${!isRecurring ? "#6F6AF8" : "#CFCFEF"}` }}>
+                Một lần
+              </button>
+              <button type="button" onClick={() => { if (!isRecurring) setFrequency("monthly"); }} className="flex-1 px-3 py-2.5 rounded-md text-sm transition-all" style={{ background: isRecurring ? "#6F6AF8" : "#F2F2FD", color: isRecurring ? "#fff" : "#1A1A2E", fontWeight: isRecurring ? 600 : 400, border: `1.5px solid ${isRecurring ? "#6F6AF8" : "#CFCFEF"}` }}>
+                🔄 Lặp lại
+              </button>
+            </div>
+          </div>
+          {isRecurring && (
+            <div>
+              <label className="block text-sm mb-2" style={{ fontWeight: 500, color: "#1A1A2E" }}>Chu kỳ lặp lại</label>
+              <div className="flex gap-2">
+                {(["daily", "weekly", "monthly", "yearly"] as const).map((c) => (
+                  <button key={c} type="button" onClick={() => setFrequency(c)} className="flex-1 px-3 py-2 rounded-md text-sm transition-all" style={{ background: frequency === c ? "#6F6AF8" : "#F2F2FD", color: frequency === c ? "#fff" : "#1A1A2E", fontWeight: frequency === c ? 600 : 400, border: `1px solid ${frequency === c ? "#6F6AF8" : "#CFCFEF"}` }}>
+                    {frequencyLabels[c] ?? c}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-sm mb-2" style={{ fontWeight: 500, color: "#1A1A2E" }}>Cách tính thu</label>
-            <div className="flex gap-4">
-              {(["per_apartment", "per_resident"] as const).map((type) => (
+            <div className="flex flex-col gap-2">
+              {(
+                [
+                  ["per_apartment", "Thu theo căn"],
+                  ["per_resident", "Thu theo nhân khẩu"],
+                  ["per_vehicle", "Thu theo phương tiện"],
+                ] as const
+              ).map(([type, label]) => (
                 <label key={type} className="flex items-center gap-2 cursor-pointer">
-                  <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center" style={{ borderColor: chargeType === type ? "#6F6AF8" : "#CFCFEF" }}>
+                  <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0" style={{ borderColor: chargeType === type ? "#6F6AF8" : "#CFCFEF" }}>
                     {chargeType === type && <div className="w-2 h-2 rounded-full" style={{ background: "#6F6AF8" }} />}
                   </div>
                   <input type="radio" name="editChargeType" className="sr-only" checked={chargeType === type} onChange={() => setChargeType(type)} />
-                  <span className="text-sm" style={{ color: "#1A1A2E" }}>{type === "per_apartment" ? "Thu theo căn" : "Thu theo nhân khẩu"}</span>
+                  <span className="text-sm" style={{ color: "#1A1A2E" }}>{label}</span>
                 </label>
               ))}
             </div>
@@ -99,16 +283,88 @@ function EditFeeModal({
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Phí dịch vụ..." className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2" style={{ borderColor: errors.name ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }} />
             {errors.name && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.name}</p>}
           </div>
-          <div>
-            <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Số tiền (VNĐ) {feeType === "mandatory" ? "*" : ""}</label>
-            <input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2" style={{ borderColor: errors.amount ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }} />
-            {errors.amount && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.amount}</p>}
-          </div>
-          <div>
-            <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Hạn thanh toán <span style={{ color: "#F44336" }}>*</span></label>
-            <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2" style={{ borderColor: errors.deadline ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }} />
-            {errors.deadline && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.deadline}</p>}
-          </div>
+          {chargeType === "per_vehicle" ? (
+            <div className="space-y-3">
+              <label className="block text-sm mb-1" style={{ fontWeight: 500, color: "#1A1A2E" }}>
+                Mức thu theo loại xe (VNĐ/xe)
+              </label>
+              {[
+                ["Xe máy", vMoto, setVMoto] as const,
+                ["Ô tô", vCar, setVCar] as const,
+                ["Xe đạp", vBike, setVBike] as const,
+              ].map(([label, val, setV]) => (
+                <div key={label}>
+                  <label className="block text-xs mb-1" style={{ color: "#717182" }}>{label}</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={formatVndDigits(val)}
+                    onChange={(e) => setV(digitsOnly(e.target.value))}
+                    placeholder="0"
+                    className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2"
+                    style={{ borderColor: errors.amount ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  />
+                </div>
+              ))}
+              {errors.amount && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.amount}</p>}
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Số tiền (VNĐ) {feeType === "mandatory" ? "*" : ""}</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={formatVndDigits(amount)}
+                onChange={(e) => setAmount(digitsOnly(e.target.value))}
+                placeholder="0"
+                className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2"
+                style={{ borderColor: errors.amount ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+              />
+              {errors.amount && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.amount}</p>}
+            </div>
+          )}
+          {isRecurring ? (
+            <div>
+              <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Chu kỳ đợt thu <span style={{ color: "#F44336" }}>*</span></label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: "#717182" }}>Ngày bắt đầu</label>
+                  <DatePickerInput
+                    value={startDate}
+                    onChange={(v) => setStartDate(v)}
+                    error={errors.startDate}
+                    placeholder="Chọn ngày"
+                    buttonClassName="px-3 py-2.5 outline-none focus:ring-2"
+                  />
+                  {errors.startDate && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.startDate}</p>}
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: "#717182" }}>Ngày kết thúc</label>
+                  <DatePickerInput
+                    value={endDate}
+                    onChange={(v) => setEndDate(v)}
+                    error={errors.endDate}
+                    placeholder="Chọn ngày"
+                    buttonClassName="px-3 py-2.5 outline-none focus:ring-2"
+                  />
+                  {errors.endDate && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.endDate}</p>}
+                </div>
+              </div>
+              <p className="text-xs mt-1" style={{ color: "#717182" }}>⏳ Đợt tiếp theo tự lặp: ngày bắt đầu đợt sau = ngày kết thúc đợt trước + 1.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Hạn thanh toán <span style={{ color: "#F44336" }}>*</span></label>
+              <DatePickerInput
+                value={deadline}
+                onChange={(v) => setDeadline(v)}
+                error={errors.deadline}
+                placeholder="Chọn ngày"
+                buttonClassName="px-3 py-2.5 outline-none focus:ring-2"
+              />
+              {errors.deadline && <p className="text-xs mt-1" style={{ color: "#F44336" }}>{errors.deadline}</p>}
+            </div>
+          )}
           <div>
             <label className="block text-sm mb-1.5" style={{ fontWeight: 500, color: "#1A1A2E" }}>Ghi chú</label>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Ghi chú (tùy chọn)" className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2" style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }} />
@@ -145,9 +401,12 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
   const [selectedRound, setSelectedRound] = useState<CollectionRound | null>(null);
   const [roundObligations, setRoundObligations] = useState<RoundObligationRow[] | null>(null);
   const [showRoundDropdown, setShowRoundDropdown] = useState(false);
+  const [roundsLoading, setRoundsLoading] = useState(false);
+  const [roundsError, setRoundsError] = useState<string | null>(null);
   const [showCreateRound, setShowCreateRound] = useState(false);
   const [newRoundName, setNewRoundName] = useState("");
   const [newRoundPeriod, setNewRoundPeriod] = useState("");
+  const [newRoundStartDate, setNewRoundStartDate] = useState("");
   const [newRoundDeadline, setNewRoundDeadline] = useState("");
   const [showNotifyModal, setShowNotifyModal] = useState(false);
   const [notifyTarget, setNotifyTarget] = useState<"unpaid" | "overdue">("unpaid");
@@ -210,9 +469,13 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
         setRounds([]);
         setSelectedRound(null);
         setRoundObligations(null);
+        setRoundsLoading(false);
+        setRoundsError(null);
         return;
       }
       try {
+        setRoundsLoading(true);
+        setRoundsError(null);
         const list = await fetchRoundsByFee(viewingFee.id);
         if (cancelled) return;
         const normalized = Array.isArray(list) ? list : [];
@@ -224,6 +487,11 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
         setRounds([]);
         setSelectedRound(null);
         setRoundObligations(null);
+        setRoundsError("Không tải được danh sách đợt thu");
+        toast.error("Không tải được danh sách đợt thu");
+      } finally {
+        if (cancelled) return;
+        setRoundsLoading(false);
       }
     }
     load();
@@ -381,22 +649,29 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
     .toLocaleString("vi-VN");
 
   if (viewingFee) {
+    const selectedRoundLabel = roundsLoading
+      ? "Đang tải..."
+      : selectedRound?.name ?? (rounds.length > 0 ? "Chọn đợt thu" : "Chưa có đợt thu");
+
     const roundBasedStats = Array.isArray(roundObligations) && roundObligations.length > 0
       ? {
           collectedUnits: roundObligations.filter((r) => r.paid).length,
           totalUnits: roundObligations.length,
-          pct: (() => {
-            const expected = roundObligations.reduce((s, r) => s + (Number(r.expectedAmount) || 0), 0);
-            const paid = roundObligations.reduce((s, r) => s + (Number(r.paidAmount) || 0), 0);
-            return expected > 0 ? Math.min(100, Math.round((paid / expected) * 100)) : (paid > 0 ? 100 : 0);
-          })(),
+          expectedAmount: roundObligations.reduce((s, r) => s + (Number(r.expectedAmount) || 0), 0),
+          collectedAmount: roundObligations.reduce((s, r) => s + (Number(r.paidAmount) || 0), 0),
         }
       : null;
 
     const stats = roundBasedStats ?? statsByFeeId[viewingFee.id];
     const collectedUnits = stats?.collectedUnits ?? 0;
     const totalUnits = stats?.totalUnits ?? 0;
-    const pct = totalUnits > 0 ? stats?.pct ?? 0 : 0;
+    const expectedAmount = (stats as any)?.expectedAmount ?? 0;
+    const collectedAmount = (stats as any)?.collectedAmount ?? 0;
+    const pctExact =
+      expectedAmount > 0 ? Math.max(0, Math.min(100, (Number(collectedAmount) / Number(expectedAmount)) * 100)) : 0;
+    const pctNumber = totalUnits > 0 ? Math.max(0, Math.min(100, pctExact)) : 0;
+    const pctLabel =
+      pctNumber > 0 && pctNumber < 1 ? `${pctNumber.toFixed(1)}%` : `${Math.round(pctNumber)}%`;
 
     const feePaymentsAll = payments.filter((p) => p.feeId === viewingFee.id);
     const isDefaultRoundSelected = selectedRound && rounds.length > 0 && selectedRound.id === rounds[0]?.id;
@@ -434,9 +709,9 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
     const overdueHouseholds = isDeadlinePassed ? unpaidHouseholds : [];
 
     return (
-      <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ background: "#F2F2FD" }}>
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+        <div className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm">
           <div className="flex items-center gap-3">
             <button onClick={() => setViewingFee(null)} className="p-1.5 rounded hover:bg-gray-100 transition-colors">
               <ChevronLeft size={20} style={{ color: "#6F6AF8" }} />
@@ -472,7 +747,7 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
 
         <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
           {/* Round selector */}
-          <div className="bg-white rounded-lg border p-4 flex items-center justify-between" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>Đợt thu</div>
               <div className="relative">
@@ -481,7 +756,7 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                   className="flex items-center justify-between gap-2 px-3 py-2 border rounded-md text-sm min-w-[220px]"
                   style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
                 >
-                  <span>{selectedRound?.name ?? (rounds.length > 0 ? "Chọn đợt thu" : "Đang tải...")}</span>
+                  <span>{selectedRoundLabel}</span>
                   <ChevronDown size={14} style={{ color: "#6F6AF8" }} />
                 </button>
                 {showRoundDropdown && rounds.length > 0 && (
@@ -496,7 +771,8 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                         className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
                         style={{ color: "#1A1A2E" }}
                       >
-                        {r.name}{r.period ? ` (${r.period})` : ""}
+                        {r.name}
+                        {r.period ? ` (${formatRoundPeriodLabel(r.period)})` : ""}
                       </button>
                     ))}
                   </div>
@@ -504,60 +780,105 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
               </div>
               {selectedRound?.deadline && (
                 <div className="text-sm" style={{ color: "#717182" }}>
-                  Hạn: <span style={{ color: "#1A1A2E", fontWeight: 600 }}>{selectedRound.deadline}</span>
+                  Hạn: <span style={{ color: "#1A1A2E", fontWeight: 600 }}>{formatDateVN(selectedRound.deadline)}</span>
                 </div>
               )}
             </div>
             {canManageFees && (
               <button
                 onClick={() => {
-                  setNewRoundName(`Đợt ${Math.max(1, rounds.length + 1)}`);
+                  const nextIndex = Math.max(1, rounds.length + 1);
                   setNewRoundPeriod("");
-                  setNewRoundDeadline(viewingFee.deadline);
+
+                  if (isRecurringFee(viewingFee)) {
+                    const ranges = rounds
+                      .map((r) => parseRoundStartEnd(r))
+                      .filter((x): x is { start: string; end: string } => !!x)
+                      .sort((a, b) => (a.end > b.end ? -1 : a.end < b.end ? 1 : 0));
+
+                    const last = ranges[0] ?? null;
+                    const baseStart = isoDateToUTC(last?.start ?? viewingFee.startDate ?? null);
+                    const baseEnd = isoDateToUTC(last?.end ?? viewingFee.endDate ?? viewingFee.startDate ?? null);
+
+                    const freq = viewingFee.frequency ?? "monthly";
+                    if (baseStart && baseEnd) {
+                      const nextStart = addByFrequencyUTC(baseStart, freq, 1);
+                      const nextEnd = addByFrequencyUTC(baseEnd, freq, 1);
+                      setNewRoundName(`Đợt ${nextIndex}`);
+                      setNewRoundStartDate(utcToIsoDate(nextStart));
+                      setNewRoundDeadline(utcToIsoDate(nextEnd));
+                    } else {
+                      toast.error("Không tính được khoảng thời gian đợt tiếp theo");
+                      return;
+                    }
+                  } else {
+                    setNewRoundName(`Đợt ${nextIndex}`);
+                    setNewRoundStartDate(viewingFee.startDate ?? viewingFee.deadline ?? "");
+                    setNewRoundDeadline(viewingFee.deadline ?? "");
+                  }
                   setShowCreateRound(true);
                 }}
                 className="flex items-center gap-2 px-4 py-2 text-white rounded-md text-sm"
                 style={{ background: "#6F6AF8", borderRadius: 6, fontWeight: 600 }}
               >
-                <Plus size={14} /> Tạo đợt thu
+                <Plus size={14} /> {isRecurringFee(viewingFee) ? "Tạo đợt thu tiếp theo" : "Tạo đợt thu"}
               </button>
+            )}
+            {isRecurringFee(viewingFee) && (
+              <span className="text-xs px-3 py-1.5 rounded-full" style={{ background: "#4CAF5015", color: "#4CAF50", fontWeight: 500 }}>
+                ⏳ Tự động tạo đợt ({frequencyLabels[viewingFee.frequency ?? "one_time"]})
+              </span>
             )}
           </div>
 
           {/* Info cards */}
-          <div className="grid grid-cols-4 gap-4">
-            <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
-              <div className="text-sm" style={{ color: "#717182" }}>Số tiền</div>
-              <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>{viewingFee.amount}</div>
-              <div className="text-xs" style={{ color: "#717182" }}>{viewingFee.unit}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="bm-card bm-card-hover p-4">
+              <div className="text-sm" style={{ color: "#717182" }}>{viewingFee.chargeType === "per_vehicle" ? "Mức / loại xe" : "Số tiền"}</div>
+              <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>
+                {viewingFee.chargeType === "per_vehicle" ? (
+                  <span className="text-sm leading-snug">
+                    XM {formatVndValue(viewingFee.vehicleRateMotorcycle ?? 0)} · Ô tô {formatVndValue(viewingFee.vehicleRateCar ?? 0)} · XĐ{" "}
+                    {formatVndValue(viewingFee.vehicleRateBicycle ?? 0)}
+                  </span>
+                ) : (
+                  formatVndValue(viewingFee.amount)
+                )}
+              </div>
+              <div className="text-xs" style={{ color: "#717182" }}>{viewingFee.chargeType === "per_vehicle" ? "VNĐ/xe" : viewingFee.unit}</div>
             </div>
-            <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+            <div className="bm-card bm-card-hover p-4">
               <div className="text-sm" style={{ color: "#717182" }}>Hạn nộp</div>
-              <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>{viewingFee.deadline}</div>
+              <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>{formatDateVN(viewingFee.deadline)}</div>
             </div>
-            <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+            <div className="bm-card bm-card-hover p-4">
               <div className="text-sm" style={{ color: "#717182" }}>Đã thu</div>
               <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#4CAF50" }}>
-                {collectedUnits}/{totalUnits} {viewingFee.chargeType === "per_resident" ? "nhân khẩu (ước tính)" : "hộ"}
+                {collectedUnits}/{totalUnits}{" "}
+                {viewingFee.chargeType === "per_resident"
+                  ? "nhân khẩu (ước tính)"
+                  : viewingFee.chargeType === "per_vehicle"
+                    ? "hộ (theo xe)"
+                    : "hộ"}
               </div>
             </div>
-            <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+            <div className="bm-card bm-card-hover p-4">
               <div className="text-sm" style={{ color: "#717182" }}>Tỉ lệ hoàn thành</div>
               <div className="text-lg mt-1" style={{ fontWeight: 700, color: "#6F6AF8" }}>
-                {pct}%
+                {pctLabel}
               </div>
               <div className="w-full h-2 rounded-full mt-2" style={{ background: "#F2F2FD" }}>
                 <div
                   className="h-full rounded-full"
-                  style={{ width: `${pct}%`, background: "#6F6AF8" }}
+                  style={{ width: `${pctNumber}%`, background: "#6F6AF8" }}
                 />
               </div>
             </div>
           </div>
 
           {/* Detail table - dữ liệu từ payments đã thu cho khoản thu này */}
-          <div className="bg-white rounded-lg border overflow-hidden" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
-            <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "#CFCFEF" }}>
+          <div className="bm-table">
+            <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "#E2E4F0" }}>
               <h3 className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>Chi tiết thu phí theo hộ gia đình</h3>
             </div>
             <table className="w-full">
@@ -590,7 +911,7 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                           Đã thanh toán
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-xs" style={{ color: "#717182" }}>{row.date}</td>
+                      <td className="px-4 py-2.5 text-xs" style={{ color: "#717182" }}>{formatDateVN(row.date)}</td>
                     </tr>
                   ));
                 })()}
@@ -600,7 +921,7 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
 
           {/* Hộ chưa đóng / Hộ quá hạn */}
           <div className="grid grid-cols-1 gap-4">
-            <div className="bg-white rounded-lg border overflow-hidden" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+            <div className="bm-table">
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "#CFCFEF", background: "#FF980008" }}>
                 <h3 className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>Hộ chưa đóng</h3>
                 {unpaidHouseholds.length > 0 && (
@@ -642,7 +963,7 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
             </div>
 
             {isDeadlinePassed && (
-              <div className="bg-white rounded-lg border overflow-hidden" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+              <div className="bm-table">
                 <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "#CFCFEF", background: "#F4433608" }}>
                   <h3 className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>Hộ quá hạn</h3>
                   {overdueHouseholds.length > 0 && (
@@ -770,23 +1091,21 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Kỳ thu (tùy chọn)</label>
-                      <input
-                        value={newRoundPeriod}
-                        onChange={(e) => setNewRoundPeriod(e.target.value)}
-                        placeholder="VD: 2026-03"
-                        className="w-full px-3 py-2 border rounded-md text-sm"
-                        style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                      <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Ngày bắt đầu</label>
+                      <DatePickerInput
+                        value={newRoundStartDate}
+                        onChange={setNewRoundStartDate}
+                        placeholder="Chọn ngày"
+                        buttonClassName="px-3 py-2"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Hạn nộp</label>
-                      <input
-                        type="date"
+                      <label className="block text-sm mb-1" style={{ color: "#717182", fontWeight: 500 }}>Ngày kết thúc</label>
+                      <DatePickerInput
                         value={newRoundDeadline}
-                        onChange={(e) => setNewRoundDeadline(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md text-sm"
-                        style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                        onChange={setNewRoundDeadline}
+                        placeholder="Chọn ngày"
+                        buttonClassName="px-3 py-2"
                       />
                     </div>
                   </div>
@@ -805,11 +1124,19 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                         toast.error("Vui lòng nhập tên đợt");
                         return;
                       }
+                      if (!newRoundStartDate || !newRoundDeadline) {
+                        toast.error("Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc");
+                        return;
+                      }
+                      if (newRoundStartDate > newRoundDeadline) {
+                        toast.error("Ngày bắt đầu phải <= ngày kết thúc");
+                        return;
+                      }
                       try {
                         const created = await createRound(viewingFee.id, {
                           name: newRoundName.trim(),
-                          period: newRoundPeriod.trim() || undefined,
-                          deadline: newRoundDeadline || undefined,
+                          startDate: newRoundStartDate,
+                          endDate: newRoundDeadline,
                         });
                         const list = await fetchRoundsByFee(viewingFee.id);
                         setRounds(Array.isArray(list) ? list : []);
@@ -836,9 +1163,9 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ background: "#F2F2FD" }}>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+      <div className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm">
         <h1 className="text-xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>Quản lý Khoản thu</h1>
         <div className="flex items-center gap-3">
           <button
@@ -863,21 +1190,21 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
       <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
         {/* Summary cards */}
         <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4">
             <div className="flex items-center gap-2 mb-1">
               <Clock size={16} style={{ color: "#6F6AF8" }} />
               <span className="text-sm" style={{ color: "#717182" }}>Đang thu</span>
             </div>
             <div className="text-2xl" style={{ fontWeight: 700, color: "#6F6AF8" }}>{activeFees}</div>
           </div>
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4">
             <div className="flex items-center gap-2 mb-1">
               <CheckCircle2 size={16} style={{ color: "#4CAF50" }} />
               <span className="text-sm" style={{ color: "#717182" }}>Hoàn thành</span>
             </div>
             <div className="text-2xl" style={{ fontWeight: 700, color: "#4CAF50" }}>{completedFees}</div>
           </div>
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4">
             <div className="flex items-center gap-2 mb-1">
               <Wallet size={16} style={{ color: "#FF9800" }} />
               <span className="text-sm" style={{ color: "#717182" }}>Tổng đã thu</span>
@@ -942,13 +1269,13 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
             const collectedUnits = stats?.collectedUnits ?? 0;
             const totalUnits = stats?.totalUnits ?? 0;
             return (
-              <div key={fee.id} className="bg-white rounded-lg border p-4 hover:shadow-md transition-all" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+              <div key={fee.id} className="bm-card bm-card-hover p-4">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-sm" style={{ fontWeight: 600, color: "#1A1A2E" }}>{fee.name}</h3>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs px-2 py-0.5 rounded-full" style={{
                         background: fee.type === "mandatory" ? "#6F6AF815" : "#4CAF5015",
                         color: fee.type === "mandatory" ? "#6F6AF8" : "#4CAF50",
@@ -959,6 +1286,11 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                       <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: cfg.bg, color: cfg.color, fontWeight: 500 }}>
                         <StatusIcon size={10} /> {cfg.label}
                       </span>
+                      {isRecurringFee(fee) && (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#FF980015", color: "#FF9800", fontWeight: 500 }}>
+                          ⏳ {frequencyLabels[fee.frequency ?? "one_time"]}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex gap-1">
@@ -991,8 +1323,25 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
                 </div>
 
                 <div className="flex items-center justify-between text-xs mb-2" style={{ color: "#717182" }}>
-                  <span>Số tiền: <span style={{ color: "#1A1A2E", fontWeight: 500 }}>{fee.amount} {fee.unit}</span></span>
-                  <span>Hạn: {fee.deadline}</span>
+                  <span>
+                    {fee.chargeType === "per_vehicle" ? (
+                      <>
+                        Mức:{" "}
+                        <span style={{ color: "#1A1A2E", fontWeight: 500 }}>
+                          XM {formatVndValue(fee.vehicleRateMotorcycle ?? 0)} · Ô tô {formatVndValue(fee.vehicleRateCar ?? 0)} · XĐ{" "}
+                          {formatVndValue(fee.vehicleRateBicycle ?? 0)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        Số tiền:{" "}
+                        <span style={{ color: "#1A1A2E", fontWeight: 500 }}>
+                          {formatVndValue(fee.amount)} {fee.unit}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                  <span>Hạn: {formatDateVN(fee.deadline)}</span>
                 </div>
 
                 {/* Progress */}
@@ -1027,10 +1376,17 @@ export function FeeScreen({ fees, payments, canManageFees, onCreateFee, onCollec
               try {
                 await updateFee(editingFee.id, {
                   name: data.name,
-                  amount: Number(data.amount) || 0,
+                  amount: data.chargeType === "per_vehicle" ? 0 : Number(data.amount) || 0,
                   type: data.type,
                   chargeType: data.chargeType,
                   deadline: data.deadline || undefined,
+                  frequency: data.frequency,
+                  startDate: data.startDate || undefined,
+                  endDate: data.endDate || undefined,
+                  vehicleRateMotorcycle:
+                    data.chargeType === "per_vehicle" ? (data.vehicleRateMotorcycle ?? null) : null,
+                  vehicleRateCar: data.chargeType === "per_vehicle" ? (data.vehicleRateCar ?? null) : null,
+                  vehicleRateBicycle: data.chargeType === "per_vehicle" ? (data.vehicleRateBicycle ?? null) : null,
                 });
                 onRefreshFees();
                 setEditingFee(null);

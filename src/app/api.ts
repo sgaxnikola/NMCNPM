@@ -59,6 +59,7 @@ async function fetchJson<T>(path: string, init: RequestInit | undefined, fallbac
 
 function mapBackendRoleToUserRole(role: string | null | undefined): UserRole {
   const normalized = (role ?? "").toLowerCase();
+  if (normalized === "resident") return "resident";
   if (normalized === "leader") return "leader";
   if (normalized === "viceleader" || normalized === "vice_leader") return "viceLeader";
   return "accountant";
@@ -75,6 +76,7 @@ export async function registerAccount(opts: { email: string; password: string; r
         password: opts.password,
         fullName: opts.email.trim(),
         role: opts.role,
+        householdId: undefined,
       }),
     },
     "Đăng ký tài khoản thất bại"
@@ -84,6 +86,63 @@ export async function registerAccount(opts: { email: string; password: string; r
     email: (data.username as string | undefined) ?? opts.email.trim().toLowerCase(),
     role: mapBackendRoleToUserRole(data.role as string | undefined),
   };
+}
+
+export async function registerResidentAccount(opts: { email: string; password: string; householdId: number }) {
+  const data = await fetchJson<any>(
+    "/auth/register",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: opts.email.trim().toLowerCase(),
+        password: opts.password,
+        fullName: opts.email.trim(),
+        role: "resident",
+        householdId: opts.householdId,
+      }),
+    },
+    "Đăng ký tài khoản cư dân thất bại"
+  );
+  return {
+    id: data.id as number | undefined,
+    email: (data.username as string | undefined) ?? opts.email.trim().toLowerCase(),
+    role: mapBackendRoleToUserRole(data.role as string | undefined),
+    householdId: (data.householdId as number | undefined) ?? opts.householdId,
+  };
+}
+
+export async function fetchResidentPortalSummary(username: string) {
+  const u = username.trim().toLowerCase();
+  return fetchJson<any>(`/portal/summary?username=${encodeURIComponent(u)}`, undefined, "Không tải được cổng cư dân");
+}
+
+export async function createOnlinePayment(opts: { username: string; feeId: number; amount: number }) {
+  return fetchJson<any>(
+    "/portal/payments/online",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: opts.username.trim().toLowerCase(),
+        feeId: opts.feeId,
+        amount: opts.amount,
+      }),
+    },
+    "Không tạo được giao dịch online"
+  );
+}
+
+export async function confirmOnlinePayment(opts: { username: string; paymentId: number }) {
+  return fetchJson<any>(
+    `/portal/payments/online/${opts.paymentId}/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: opts.username.trim().toLowerCase() }),
+    },
+    "Không xác nhận được giao dịch online"
+  );
 }
 
 export async function loginAccount(opts: { email: string; password: string }) {
@@ -112,6 +171,29 @@ export async function fetchAccountByUsername(username: string) {
     `/auth/account?username=${encodeURIComponent(u)}`,
     undefined,
     "Không tải được thông tin tài khoản"
+  );
+}
+
+export async function updateAccountProfile(opts: {
+  username: string;
+  fullName: string;
+  newUsername?: string;
+}) {
+  const u = opts.username.trim().toLowerCase();
+  const body: { username: string; fullName: string; newUsername?: string } = {
+    username: u,
+    fullName: opts.fullName.trim(),
+  };
+  const next = opts.newUsername?.trim().toLowerCase();
+  if (next && next !== u) body.newUsername = next;
+  return fetchJson<{ id?: number; username?: string; fullName?: string; role?: string }>(
+    "/auth/profile",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    "Không lưu được thông tin cá nhân"
   );
 }
 
@@ -246,6 +328,7 @@ export async function updateResident(
   return updated;
 }
 
+
 export async function fetchPopulationEvents(householdId?: number) {
   const query = householdId ? `?householdId=${householdId}` : "";
   return fetchJson<any[]>(`/population-events${query}`, undefined, "Không tải được biến động dân cư");
@@ -297,16 +380,28 @@ export async function createFee(body: {
   name: string;
   amount: number;
   type: "mandatory" | "voluntary";
-  chargeType?: "per_apartment" | "per_resident";
+  chargeType?: "per_apartment" | "per_resident" | "per_vehicle";
   deadline?: string;
+  frequency?: string;
+  startDate?: string;
+  endDate?: string;
+  vehicleRateMotorcycle?: number | null;
+  vehicleRateCar?: number | null;
+  vehicleRateBicycle?: number | null;
 }) {
   const payload: Record<string, unknown> = {
     name: body.name,
     amount: body.amount,
     type: body.type === "mandatory" ? 0 : 1,
     chargeType: body.chargeType ?? "per_apartment",
+    vehicleRateMotorcycle: body.vehicleRateMotorcycle ?? null,
+    vehicleRateCar: body.vehicleRateCar ?? null,
+    vehicleRateBicycle: body.vehicleRateBicycle ?? null,
   };
   if (body.deadline) payload.deadline = body.deadline;
+  if (body.frequency) payload.frequency = body.frequency;
+  if (body.startDate) payload.startDate = body.startDate;
+  if (body.endDate) payload.endDate = body.endDate;
   return fetchJson<any>(
     "/fees",
     {
@@ -324,8 +419,14 @@ export async function updateFee(
     name?: string;
     amount?: number;
     type?: "mandatory" | "voluntary";
-    chargeType?: "per_apartment" | "per_resident";
+    chargeType?: "per_apartment" | "per_resident" | "per_vehicle";
     deadline?: string;
+    frequency?: string;
+    startDate?: string;
+    endDate?: string;
+    vehicleRateMotorcycle?: number | null;
+    vehicleRateCar?: number | null;
+    vehicleRateBicycle?: number | null;
   }
 ) {
   const payload: Record<string, unknown> = {};
@@ -334,6 +435,12 @@ export async function updateFee(
   if (body.type != null) payload.type = body.type === "mandatory" ? 0 : 1;
   if (body.chargeType != null) payload.chargeType = body.chargeType;
   if (body.deadline != null) payload.deadline = body.deadline;
+  if (body.frequency != null) payload.frequency = body.frequency;
+  if (body.startDate != null) payload.startDate = body.startDate;
+  if (body.endDate != null) payload.endDate = body.endDate;
+  if (body.vehicleRateMotorcycle !== undefined) payload.vehicleRateMotorcycle = body.vehicleRateMotorcycle;
+  if (body.vehicleRateCar !== undefined) payload.vehicleRateCar = body.vehicleRateCar;
+  if (body.vehicleRateBicycle !== undefined) payload.vehicleRateBicycle = body.vehicleRateBicycle;
   return fetchJson<any>(
     `/fees/${id}`,
     {
@@ -387,7 +494,7 @@ export async function fetchRoundsByFee(feeId: number) {
 
 export async function createRound(
   feeId: number,
-  body: { name: string; period?: string; deadline?: string }
+  body: { name: string; period?: string; deadline?: string; startDate?: string; endDate?: string }
 ) {
   return fetchJson<CollectionRound>(
     `/rounds?feeId=${feeId}`,
@@ -398,6 +505,8 @@ export async function createRound(
         name: body.name,
         period: body.period ?? null,
         deadline: body.deadline ?? null,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
       }),
     },
     "Không tạo được đợt thu"
@@ -478,5 +587,54 @@ export async function createVehicle(body: {
 
 export async function deleteVehicle(id: number) {
   await fetchJson(`/vehicles/${id}`, { method: "DELETE" }, "Không xóa được phương tiện");
+}
+
+export async function updateVehicle(
+  id: number,
+  body: { householdId?: number; type?: VehicleType; plate?: string; note?: string }
+) {
+  return fetchJson<any>(
+    `/vehicles/${id}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    "Không cập nhật được phương tiện"
+  );
+}
+
+export async function fetchReportSummary() {
+  return fetchJson<{
+    totalHouseholds: number;
+    totalResidents: number;
+    totalCollected: number;
+    totalUncollected: number;
+    unpaidHouseholds: Array<{
+      householdId: number;
+      address: string;
+      headName: string;
+      feeId: number;
+      feeName: string;
+      expectedAmount: number;
+      paidAmount: number;
+      remainingAmount: number;
+    }>;
+  }>("/reports/summary", undefined, "Không tải được báo cáo thống kê");
+}
+
+export async function searchGlobal(query: string) {
+  const q = query.trim();
+  return fetchJson<{
+    query: string;
+    households: Array<{ id: number; address: string; members: number; headName?: string }>;
+    residents: Array<{ id: number; householdId: number; fullName: string; cccd?: string; phone?: string }>;
+    fees: Array<{ id: number; name: string; amount: number; frequency?: string; chargeType?: string }>;
+    vehicles: Array<{ id: number; householdId: number; apartment?: string; type: string; plate?: string }>;
+  }>(`/search?q=${encodeURIComponent(q)}`, undefined, "Không tìm kiếm được");
+}
+
+export async function fetchLivingFees() {
+  return fetchJson<any[]>("/living-fees", undefined, "Không tải được phí sinh hoạt");
 }
 

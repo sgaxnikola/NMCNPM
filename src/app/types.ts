@@ -1,5 +1,7 @@
-/** Thu theo căn (1 số tiền/căn) hoặc theo nhân khẩu (số tiền × số người trong căn) */
-export type FeeChargeType = "per_apartment" | "per_resident";
+/** Thu theo căn, nhân khẩu, hoặc theo từng phương tiện (mức khác nhau cho xe máy/ô tô/xe đạp) */
+export type FeeChargeType = "per_apartment" | "per_resident" | "per_vehicle";
+
+export type FeeFrequency = "daily" | "weekly" | "monthly" | "yearly" | "one_time";
 
 export interface FeeItem {
   id: number;
@@ -9,14 +11,24 @@ export interface FeeItem {
   unit: string;
   /** Cách tính: theo căn hoặc theo nhân khẩu. Mặc định per_apartment */
   chargeType?: FeeChargeType;
+  /** Mức thu mỗi xe (khi chargeType = per_vehicle), VNĐ */
+  vehicleRateMotorcycle?: number;
+  vehicleRateCar?: number;
+  vehicleRateBicycle?: number;
   deadline: string;
   status: "active" | "completed" | "expired";
   collected: number;
   total: number;
   note: string;
+  /** Tần suất: monthly, quarterly, yearly, one_time */
+  frequency?: FeeFrequency;
+  /** Ngày bắt đầu đợt thu đầu tiên (yyyy-MM-dd) */
+  startDate?: string;
+  /** Ngày kết thúc đợt thu đầu tiên = ngày bắt đầu đợt 2 (yyyy-MM-dd) */
+  endDate?: string;
 }
 
-export type UserRole = "accountant" | "leader" | "viceLeader";
+export type UserRole = "accountant" | "leader" | "viceLeader" | "resident";
 
 export interface Payment {
   id: number;

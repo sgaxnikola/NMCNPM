@@ -12,7 +12,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/payments")
-@CrossOrigin(origins = "*")
 public class PaymentController {
 
     private final PaymentRepository paymentRepository;
@@ -39,6 +38,19 @@ public class PaymentController {
 
     @PostMapping
     public ResponseEntity<Payment> create(@RequestBody PaymentRequest request) {
+        if (request.feeId() == null) {
+            throw new IllegalArgumentException("feeId là bắt buộc");
+        }
+        if (request.householdId() == null) {
+            throw new IllegalArgumentException("householdId là bắt buộc");
+        }
+        if (request.amount() == null || request.amount() <= 0) {
+            throw new IllegalArgumentException("Số tiền phải lớn hơn 0");
+        }
+        if (request.paymentDate() == null || request.paymentDate().isBlank()) {
+            throw new IllegalArgumentException("Ngày thanh toán là bắt buộc");
+        }
+
         Fee fee = feeRepository.findById(request.feeId())
                 .orElseThrow(() -> new IllegalArgumentException("Fee not found"));
 
@@ -48,7 +60,11 @@ public class PaymentController {
         payment.setHouseholdId(request.householdId());
         payment.setPayerName(request.payerName());
         payment.setAmount(request.amount());
-        payment.setPaymentDate(LocalDate.parse(request.paymentDate()));
+        try {
+            payment.setPaymentDate(LocalDate.parse(request.paymentDate()));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Định dạng ngày thanh toán không hợp lệ (yyyy-MM-dd)");
+        }
 
         Payment saved = paymentRepository.save(payment);
         return ResponseEntity.ok(saved);

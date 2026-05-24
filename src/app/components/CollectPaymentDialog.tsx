@@ -2,7 +2,8 @@ import { useMemo, useState, useEffect } from "react";
 import { X, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import type { FeeItem, Household } from "../types";
-import { fetchHouseholds, fetchRoundsByFee, type CollectionRound } from "../api";
+import { fetchHouseholds, fetchRoundsByFee, fetchVehicles, type CollectionRound } from "../api";
+import { DatePickerInput } from "./shared/DatePickerInput";
 
 interface CollectPaymentDialogProps {
   fees: FeeItem[];
@@ -17,9 +18,26 @@ interface CollectPaymentDialogProps {
   onClose: () => void;
 }
 
-/** Tính số tiền cần nộp: theo căn = amount; theo nhân khẩu = amount * số người trong căn */
-function computeAmountDue(fee: FeeItem | undefined, members: number | null): number {
+/** Tính số tiền cần nộp: theo căn / nhân khẩu / phương tiện đã đăng ký */
+function computeAmountDue(
+  fee: FeeItem | undefined,
+  members: number | null,
+  vehicles: { type?: string }[]
+): number {
   if (!fee) return 0;
+  if (fee.chargeType === "per_vehicle") {
+    const rm = Number(fee.vehicleRateMotorcycle ?? 0) || 0;
+    const rc = Number(fee.vehicleRateCar ?? 0) || 0;
+    const rb = Number(fee.vehicleRateBicycle ?? 0) || 0;
+    let sum = 0;
+    for (const v of vehicles) {
+      const t = (v.type ?? "motorcycle").toLowerCase();
+      if (t === "car") sum += rc;
+      else if (t === "bicycle") sum += rb;
+      else sum += rm;
+    }
+    return sum;
+  }
   const base = Number(String(fee.amount).replace(/\s/g, "")) || 0;
   const count = fee.chargeType === "per_resident" ? (members ?? 1) : 1;
   return base * count;
@@ -39,6 +57,7 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split("T")[0]);
   const [showFeeDropdown, setShowFeeDropdown] = useState(false);
   const [showHouseholdDropdown, setShowHouseholdDropdown] = useState(false);
+  const [householdVehicles, setHouseholdVehicles] = useState<{ type?: string }[]>([]);
 
   useEffect(() => {
     fetchHouseholds()
@@ -75,6 +94,27 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
     };
   }, [selectedFee?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const hid = selectedHousehold?.id;
+    if (hid == null || selectedFee?.chargeType !== "per_vehicle") {
+      setHouseholdVehicles([]);
+      return;
+    }
+    fetchVehicles(hid)
+      .then((list) => {
+        if (cancelled) return;
+        const arr = Array.isArray(list) ? list : [];
+        setHouseholdVehicles(arr.map((v: any) => ({ type: v.type ?? "motorcycle" })));
+      })
+      .catch(() => {
+        if (!cancelled) setHouseholdVehicles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedHousehold?.id, selectedFee?.chargeType]);
+
   const filteredHouseholds = useMemo(() => {
     const q = householdQuery.trim().toLowerCase();
     if (!q) return households;
@@ -86,7 +126,7 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
     });
   }, [households, householdQuery]);
 
-  const amountDue = computeAmountDue(selectedFee, selectedHousehold?.members ?? null);
+  const amountDue = computeAmountDue(selectedFee, selectedHousehold?.members ?? null, householdVehicles);
   const amountDueFormatted = amountDue.toLocaleString("vi-VN");
 
   const formatAmount = (value: string) => {
@@ -102,9 +142,9 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" style={{ borderRadius: 8 }}>
+      <div className="relative bm-card w-full max-w-lg mx-4 max-h-[90vh] overflow-auto">
         {/* Title */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "#CFCFEF" }}>
+        <div className="bm-header flex items-center justify-between px-6 py-4">
           <h2 className="text-lg" style={{ fontWeight: 700, color: "#1A1A2E" }}>Thu phí</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 transition-colors">
             <X size={20} style={{ color: "#717182" }} />
@@ -113,7 +153,7 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
 
         <div className="px-6 py-5 space-y-5">
           {/* Section 1 - Fee Info */}
-          <div className="p-4 rounded-lg border" style={{ borderColor: "#CFCFEF", borderRadius: 8, background: "#F2F2FD" }}>
+          <div className="bm-surface p-4">
             <h3 className="text-sm mb-3" style={{ fontWeight: 600, color: "#6F6AF8" }}>Thông tin khoản thu</h3>
             <div className="relative mb-3">
               <button
@@ -181,9 +221,17 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
                 >
                   {selectedFee.type === "mandatory" ? "Bắt buộc" : "Đóng góp"}
                 </span>
-                <span style={{ color: "#717182" }}>{selectedFee.amount} {selectedFee.unit}</span>
+                <span style={{ color: "#717182" }}>
+                  {selectedFee.chargeType === "per_vehicle"
+                    ? `XM ${Number(selectedFee.vehicleRateMotorcycle ?? 0).toLocaleString("vi-VN")} · Ô tô ${Number(selectedFee.vehicleRateCar ?? 0).toLocaleString("vi-VN")} · XĐ ${Number(selectedFee.vehicleRateBicycle ?? 0).toLocaleString("vi-VN")}`
+                    : `${selectedFee.amount} ${selectedFee.unit}`}
+                </span>
                 <span className="px-2 py-0.5 rounded text-xs" style={{ background: "#E8E8F0", color: "#1A1A2E" }}>
-                  {selectedFee.chargeType === "per_resident" ? "Thu theo nhân khẩu" : "Thu theo căn"}
+                  {selectedFee.chargeType === "per_resident"
+                    ? "Thu theo nhân khẩu"
+                    : selectedFee.chargeType === "per_vehicle"
+                      ? "Thu theo phương tiện"
+                      : "Thu theo căn"}
                 </span>
               </div>
             )}
@@ -264,6 +312,11 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
                           ({selectedFee.amount} × {selectedHousehold.members} nhân khẩu)
                         </p>
                       )}
+                      {selectedFee?.chargeType === "per_vehicle" && (
+                        <p className="text-xs mt-0.5" style={{ color: "#717182" }}>
+                          Theo {householdVehicles.length} phương tiện đã đăng ký (0 nếu chưa khai báo xe).
+                        </p>
+                      )}
                     </div>
                   </>
                 )}
@@ -310,12 +363,11 @@ export function CollectPaymentDialog({ fees, onSubmit, onClose }: CollectPayment
               </div>
               <div>
                 <label className="block text-sm mb-1" style={{ fontWeight: 500, color: "#1A1A2E" }}>Ngày nộp</label>
-                <input
+                <DatePickerInput
                   value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  type="date"
-                  className="w-full px-3 py-2 bg-white border rounded-md outline-none text-sm"
-                  style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+                  onChange={setPaymentDate}
+                  placeholder="Chọn ngày thu"
+                  buttonClassName="px-3 py-2 bg-white"
                 />
               </div>
             </div>

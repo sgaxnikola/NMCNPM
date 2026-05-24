@@ -211,7 +211,7 @@ project-root/
         ApartmentScreen.tsx
         StatisticsScreen.tsx
         SettingsScreen.tsx
-        figma/ImageWithFallback.tsx
+        shared/ImageWithFallback.tsx
       types.ts
     styles/
       index.css

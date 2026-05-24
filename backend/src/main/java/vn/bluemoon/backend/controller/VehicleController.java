@@ -12,7 +12,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/vehicles")
-@CrossOrigin(origins = "*")
 public class VehicleController {
 
     private final VehicleRepository vehicleRepository;
@@ -39,10 +38,21 @@ public class VehicleController {
     ) {}
 
     @GetMapping
-    public List<VehicleResponse> getAll(@RequestParam(name = "householdId", required = false) Long householdId) {
-        List<Vehicle> list = (householdId != null)
-                ? vehicleRepository.findByHousehold_Id(householdId)
-                : vehicleRepository.findAll();
+    public List<VehicleResponse> getAll(
+            @RequestParam(name = "householdId", required = false) Long householdId,
+            @RequestParam(name = "plate", required = false) String plate,
+            @RequestParam(name = "apartment", required = false) String apartment
+    ) {
+        List<Vehicle> list;
+        if (plate != null && !plate.isBlank()) {
+            list = vehicleRepository.findByPlateContainingIgnoreCase(plate.trim());
+        } else if (apartment != null && !apartment.isBlank()) {
+            list = vehicleRepository.findByHousehold_AddressContainingIgnoreCase(apartment.trim());
+        } else if (householdId != null) {
+            list = vehicleRepository.findByHousehold_Id(householdId);
+        } else {
+            list = vehicleRepository.findAll();
+        }
         return list.stream()
                 .map(v -> new VehicleResponse(
                         v.getId(),
@@ -88,6 +98,39 @@ public class VehicleController {
         return ResponseEntity.status(HttpStatus.CREATED).body(new VehicleResponse(
                 saved.getId(),
                 hh.getId(),
+                saved.getType(),
+                saved.getPlate(),
+                saved.getNote()
+        ));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody VehicleRequest request) {
+        Vehicle v = vehicleRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Vehicle not found"));
+        if (request.type() != null && !request.type().isBlank()) {
+            String type = request.type().trim().toLowerCase();
+            if (!type.equals("motorcycle") && !type.equals("car") && !type.equals("bicycle")) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Loại phương tiện không hợp lệ");
+            }
+            v.setType(type);
+        }
+        if (request.plate() != null) {
+            String plate = request.plate().trim();
+            v.setPlate(plate.isBlank() ? null : plate);
+        }
+        if (request.note() != null) {
+            v.setNote(request.note());
+        }
+        if (request.householdId() != null) {
+            Household hh = householdRepository.findById(request.householdId())
+                    .orElseThrow(() -> new IllegalArgumentException("Household not found"));
+            v.setHousehold(hh);
+        }
+        Vehicle saved = vehicleRepository.save(v);
+        return ResponseEntity.ok(new VehicleResponse(
+                saved.getId(),
+                saved.getHousehold() != null ? saved.getHousehold().getId() : null,
                 saved.getType(),
                 saved.getPlate(),
                 saved.getNote()

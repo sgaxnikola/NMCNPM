@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Printer, ChevronDown, ChevronLeft, ChevronRight, Mail } from "lucide-react";
 import { toast } from "sonner";
 import type { FeeItem, Payment, Household } from "../types";
-import { fetchHouseholds } from "../api";
+import { fetchHouseholds, fetchReportSummary } from "../api";
+import ExcelJS from "exceljs";
+import { DatePickerInput } from "./shared/DatePickerInput";
 
 interface StatisticsScreenProps {
   fees: FeeItem[];
@@ -22,6 +24,13 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
   const [filterStartDate, setFilterStartDate] = useState<string | null>("2026-03-01");
   const [filterEndDate, setFilterEndDate] = useState<string | null>("2026-03-31");
   const [households, setHouseholds] = useState<Household[]>([]);
+  const [report, setReport] = useState<Awaited<ReturnType<typeof fetchReportSummary>> | null>(null);
+
+  useEffect(() => {
+    fetchReportSummary()
+      .then(setReport)
+      .catch(() => setReport(null));
+  }, []);
 
   useEffect(() => {
     // Nếu danh sách khoản thu thay đổi, đảm bảo chọn được khoản đầu tiên
@@ -70,7 +79,11 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
       : households.length;
 
   const expectedTotal =
-    amountPerUnit > 0 && liableUnits > 0 ? amountPerUnit * liableUnits : 0;
+    selectedFeeObj?.chargeType === "per_vehicle"
+      ? 0
+      : amountPerUnit > 0 && liableUnits > 0
+        ? amountPerUnit * liableUnits
+        : 0;
 
   const collectedForSelectedFee = filteredPayments
     .filter((p) => !selectedFeeObj || p.feeId === selectedFeeObj.id)
@@ -79,16 +92,238 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
   const completionRate =
     expectedTotal > 0 ? Math.min(100, Math.round((collectedForSelectedFee / expectedTotal) * 100)) : 0;
 
+  const exportRows = useMemo(() => {
+    const householdById = new Map<number, Household>();
+    for (const h of households) householdById.set(h.id, h);
+
+    return filteredPayments.map((p, idx) => {
+      const hh = p.householdId != null ? householdById.get(p.householdId) : undefined;
+      return {
+        "STT": idx + 1,
+        "Hộ gia đình": hh?.address ?? p.householdId ?? "",
+        "Chủ hộ": (hh?.headName ?? p.householdHead ?? "") || "",
+        "Khoản thu": p.feeName ?? "",
+        "Số tiền đã nộp": p.amount ?? 0,
+        "Trạng thái": "Đã thanh toán",
+        "Ngày nộp": p.date ?? "",
+      };
+    });
+  }, [filteredPayments, households]);
+
+  const buildSafeReportName = () =>
+    (filterFeeName || selectedFee || "thong_ke").replace(/[\\/:*?\"<>|]/g, "_");
+
+  const handleExportCsv = () => {
+    if (exportRows.length === 0) {
+      toast.info("Không có dữ liệu để xuất");
+      return;
+    }
+    const headers = Object.keys(exportRows[0]);
+    const escapeCsv = (v: unknown) => {
+      const s = String(v ?? "");
+      // Escape quotes and wrap if contains comma/newline/quote
+      const escaped = s.replace(/\"/g, "\"\"");
+      return /[\",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+    };
+    const lines = [
+      headers.join(","),
+      ...exportRows.map((row) => headers.map((h) => escapeCsv((row as any)[h])).join(",")),
+    ];
+    // Add UTF-8 BOM so Excel opens Vietnamese correctly
+    const csv = "\uFEFF" + lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${buildSafeReportName()}_thong_ke.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success("Xuất file thành công", { description: a.download });
+  };
+
+  const handleExportExcel = async () => {
+    if (exportRows.length === 0) {
+      toast.info("Không có dữ liệu để xuất");
+      return;
+    }
+    try {
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "BlueMoon";
+      wb.created = new Date();
+      const ws = wb.addWorksheet("ThongKe");
+
+      const headers = Object.keys(exportRows[0]);
+      ws.addRow(headers);
+      ws.getRow(1).font = { bold: true };
+      ws.getRow(1).alignment = { vertical: "middle" };
+
+      for (const r of exportRows) {
+        ws.addRow(headers.map((h) => (r as any)[h]));
+      }
+
+      // Basic column sizing
+      ws.columns = headers.map((h, idx) => {
+        const maxLen = Math.max(
+          h.length,
+          ...exportRows.slice(0, 200).map((r) => String((r as any)[headers[idx]] ?? "").length)
+        );
+        return { width: Math.min(40, Math.max(10, Math.ceil(maxLen * 1.1))) };
+      });
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${buildSafeReportName()}_thong_ke.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Xuất Excel thành công", { description: a.download });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Xuất Excel thất bại";
+      toast.error("Xuất Excel thất bại", { description: msg });
+    }
+  };
+
+  const handlePrint = () => {
+    if (exportRows.length === 0) {
+      toast.info("Không có dữ liệu để in");
+      return;
+    }
+    const title = `Báo cáo thống kê - ${filterFeeName || selectedFee || "Khoản thu"}`;
+    const meta = `Từ ${filterStartDate ?? "—"} đến ${filterEndDate ?? "—"}`;
+    const headers = Object.keys(exportRows[0]);
+    const html = `
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${title}</title>
+    <style>
+      body { font-family: Arial, sans-serif; color: #111; padding: 24px; }
+      h1 { font-size: 18px; margin: 0 0 6px 0; }
+      .meta { font-size: 12px; margin-bottom: 16px; color: #444; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+      th { background: #f5f5ff; }
+      @media print { body { padding: 0; } }
+    </style>
+  </head>
+  <body>
+    <h1>${title}</h1>
+    <div class="meta">${meta} • Tổng tiền: ${totalCollectedFormatted} VNĐ • Tỉ lệ hoàn thành: ${completionRate}%</div>
+    <table>
+      <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${exportRows.map((r) => `<tr>${headers.map((h) => `<td>${String((r as any)[h] ?? "")}</td>`).join("")}</tr>`).join("")}
+      </tbody>
+    </table>
+  </body>
+</html>`;
+    const w = window.open("", "_blank", "noopener,noreferrer");
+    if (!w) {
+      toast.error("Không mở được cửa sổ in (bị chặn pop-up)");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    // Some browsers don't reliably trigger `onload` for about:blank + document.write.
+    // Trigger print from the opener side after a short delay.
+    try {
+      w.focus();
+      setTimeout(() => {
+        try {
+          w.focus();
+          w.print();
+        } catch {
+          // ignore
+        }
+      }, 250);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ background: "#F2F2FD" }}>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+      <div className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm">
         <h1 className="text-xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>Thống kê các khoản thu</h1>
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
+        {report && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bm-card p-4">
+                <div className="text-sm" style={{ color: "#717182" }}>Tổng số hộ</div>
+                <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>
+                  {report.totalHouseholds}
+                </div>
+              </div>
+              <div className="bm-card p-4">
+                <div className="text-sm" style={{ color: "#717182" }}>Tổng nhân khẩu</div>
+                <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>
+                  {report.totalResidents}
+                </div>
+              </div>
+              <div className="bm-card p-4">
+                <div className="text-sm" style={{ color: "#717182" }}>Tổng tiền đã thu</div>
+                <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#4CAF50" }}>
+                  {Math.round(report.totalCollected).toLocaleString("vi-VN")} VNĐ
+                </div>
+              </div>
+              <div className="bm-card p-4">
+                <div className="text-sm" style={{ color: "#717182" }}>Tổng tiền chưa thu</div>
+                <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#F44336" }}>
+                  {Math.round(report.totalUncollected).toLocaleString("vi-VN")} VNĐ
+                </div>
+              </div>
+            </div>
+            {(report.unpaidHouseholds?.length ?? 0) > 0 && (
+              <div className="bm-card p-4">
+                <div className="text-sm mb-3" style={{ fontWeight: 600, color: "#1A1A2E" }}>
+                  Hộ chưa đóng phí ({report.unpaidHouseholds.length})
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ color: "#717182" }}>
+                        <th className="text-left py-2">Căn hộ</th>
+                        <th className="text-left py-2">Chủ hộ</th>
+                        <th className="text-left py-2">Khoản thu</th>
+                        <th className="text-right py-2">Còn lại</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.unpaidHouseholds.slice(0, 50).map((u, i) => (
+                        <tr key={`${u.householdId}-${u.feeId}-${i}`} className="border-t" style={{ borderColor: "#F0F0FA" }}>
+                          <td className="py-2">{u.address}</td>
+                          <td className="py-2">{u.headName || "—"}</td>
+                          <td className="py-2">{u.feeName}</td>
+                          <td className="py-2 text-right tabular-nums">
+                            {Math.round(u.remainingAmount).toLocaleString("vi-VN")} VNĐ
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {/* Filter Bar */}
-        <div className="flex items-center gap-3 bg-white p-4 rounded-lg border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+        <div className="bm-card p-4 flex items-center gap-3">
           <div className="relative">
             <button
               onClick={() => setShowDropdown(!showDropdown)}
@@ -121,21 +356,25 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
               </div>
             )}
           </div>
-          <input
-            type="date"
-            value={startDateInput}
-            onChange={(e) => setStartDateInput(e.target.value)}
-            className="px-3 py-2 border rounded-md text-sm"
-            style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-          />
+          <div className="min-w-[160px]">
+            <DatePickerInput
+              value={startDateInput}
+              onChange={setStartDateInput}
+              placeholder="Từ ngày"
+              icon={false}
+              buttonClassName="px-3 py-2"
+            />
+          </div>
           <span className="text-sm" style={{ color: "#717182" }}>—</span>
-          <input
-            type="date"
-            value={endDateInput}
-            onChange={(e) => setEndDateInput(e.target.value)}
-            className="px-3 py-2 border rounded-md text-sm"
-            style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-          />
+          <div className="min-w-[160px]">
+            <DatePickerInput
+              value={endDateInput}
+              onChange={setEndDateInput}
+              placeholder="Đến ngày"
+              icon={false}
+              buttonClassName="px-3 py-2"
+            />
+          </div>
           <button
             className="px-4 py-2 text-white rounded-md text-sm"
             style={{ background: "#6F6AF8", borderRadius: 6, fontWeight: 500 }}
@@ -150,23 +389,23 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
         </div>
 
         {/* Metric Cards */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bm-card bm-card-hover p-4">
             <div className="text-sm" style={{ color: "#717182" }}>Số giao dịch đã thu</div>
             <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#1A1A2E" }}>{filteredPayments.length}</div>
           </div>
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4">
             <div className="text-sm" style={{ color: "#717182" }}>Tổng tiền đã thu</div>
             <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#4CAF50" }}>{totalCollectedFormatted} VNĐ</div>
           </div>
-          <div className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="bm-card bm-card-hover p-4">
             <div className="text-sm" style={{ color: "#717182" }}>Tỉ lệ hoàn thành</div>
             <div className="text-2xl mt-1" style={{ fontWeight: 700, color: "#6F6AF8" }}>{completionRate}%</div>
           </div>
         </div>
 
         {/* Table - dữ liệu từ payments */}
-        <div className="bg-white rounded-lg border overflow-hidden" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+        <div className="bm-table">
           <table className="w-full">
             <thead>
               <tr style={{ background: "#F2F2FD" }}>
@@ -204,7 +443,7 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
           </table>
 
           {filteredPayments.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t" style={{ borderColor: "#F2F2FD" }}>
+            <div className="flex items-center justify-between px-4 py-3 border-t" style={{ borderColor: "#EEF0FB" }}>
               <span className="text-sm" style={{ color: "#717182" }}>Hiển thị {filteredPayments.length} kết quả</span>
               <div className="flex items-center gap-1">
                 <button type="button" className="p-1.5 rounded hover:bg-gray-100"><ChevronLeft size={16} style={{ color: "#717182" }} /></button>
@@ -218,21 +457,28 @@ export function StatisticsScreen({ fees, payments }: StatisticsScreenProps) {
         {/* Action Buttons */}
         <div className="flex gap-3">
           <button
-            onClick={() => toast.success("Xuất file Excel thành công", { description: `${selectedFee}_thong_ke.xlsx` })}
+            onClick={handleExportExcel}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-md text-sm" style={{ background: "#4CAF50", borderRadius: 6, fontWeight: 500 }}
           >
             <Download size={16} /> Xuất Excel
           </button>
           <button
-            onClick={() => toast.info("Đang chuẩn bị in báo cáo...")}
+            onClick={handlePrint}
             className="flex items-center gap-2 px-4 py-2.5 border rounded-md text-sm" style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E", fontWeight: 500 }}
           >
             <Printer size={16} style={{ color: "#6F6AF8" }} /> In báo cáo
           </button>
+          <button
+            onClick={handleExportCsv}
+            className="flex items-center gap-2 px-4 py-2.5 border rounded-md text-sm"
+            style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E", fontWeight: 500 }}
+          >
+            <Download size={16} style={{ color: "#4CAF50" }} /> Xuất CSV
+          </button>
         </div>
 
         {/* Recent Payments from system state */}
-        <div className="bg-white rounded-lg border p-4" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+        <div className="bm-card bm-card-hover p-4">
           <h2 className="text-sm mb-3" style={{ fontWeight: 600, color: "#1A1A2E" }}>Giao dịch thu phí gần đây</h2>
           {filteredPayments.length === 0 ? (
             <p className="text-sm" style={{ color: "#717182" }}>Chưa có giao dịch nào được ghi nhận trong hệ thống.</p>

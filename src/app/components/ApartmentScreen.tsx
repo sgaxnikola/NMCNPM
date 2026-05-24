@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Home, Layers, X, Users, Phone, Mail, Building2,
 import { toast } from "sonner";
 import type { Household, Resident } from "../types";
 import { createHousehold, createResident, fetchHouseholds, fetchResidents, createPopulationEvent } from "../api";
+import { DatePickerInput } from "./shared/DatePickerInput";
 
 const APARTMENT_MAINTENANCE_STORAGE_KEY = "bluemoon_apartment_maintenance";
 const APARTMENT_BUSINESS_STORAGE_KEY = "bluemoon_apartment_business";
@@ -250,9 +251,9 @@ export function ApartmentScreen() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ background: "#F2F2FD" }}>
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+        <div className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm">
           <h1 className="text-xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>Quản lý Căn hộ</h1>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-4 text-xs">
@@ -305,7 +306,7 @@ export function ApartmentScreen() {
           {/* Main content */}
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Floor info */}
-            <div className="flex items-center justify-between px-6 py-3 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+            <div className="bm-header flex items-center justify-between px-6 py-3">
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Layers size={18} style={{ color: "#6F6AF8" }} />
@@ -314,7 +315,7 @@ export function ApartmentScreen() {
                 <span className="text-sm" style={{ color: "#717182" }}>
                   {apartments.length} căn hộ (Block A)
                 </span>
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#F2F2FD", color: "#717182", fontWeight: 500 }}>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#EEF0FB", color: "#717182", fontWeight: 500 }}>
                   {selectedFloor <= 4 ? "Tầng shophouse" : selectedFloor <= 29 ? "Tầng căn hộ" : "Tầng penthouse"}
                 </span>
                 <div className="flex gap-2 ml-2">
@@ -336,7 +337,7 @@ export function ApartmentScreen() {
                       key={b}
                       className="px-3 py-1 rounded text-xs transition-all"
                       style={{
-                        background: "#F2F2FD",
+                        background: "#EEF0FB",
                         color: "#717182",
                         fontWeight: 500,
                         borderRadius: 6,
@@ -361,7 +362,7 @@ export function ApartmentScreen() {
 
             {/* Grid căn */}
             <div className="flex-1 overflow-auto px-6 py-4">
-              <div className="border rounded-lg p-4 bg-white w-full" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+              <div className="bm-card p-4 w-full">
                 <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
                   {filtered.map((apt) => {
                     const cfg = statusConfig[apt.status];
@@ -678,13 +679,7 @@ export function ApartmentScreen() {
                 </div>
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "#717182", fontWeight: 500 }}>Ngày sinh</label>
-                  <input
-                    value={hDob}
-                    onChange={(e) => setHDob(e.target.value)}
-                    type="date"
-                    className="w-full px-3 py-2 border rounded-md text-sm"
-                    style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
-                  />
+                  <DatePickerInput value={hDob} onChange={setHDob} placeholder="Chọn ngày" buttonClassName="px-3 py-2" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

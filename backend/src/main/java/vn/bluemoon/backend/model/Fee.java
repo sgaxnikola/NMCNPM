@@ -2,6 +2,8 @@ package vn.bluemoon.backend.model;
 
 import jakarta.persistence.*;
 
+import java.time.LocalDate;
+
 @Entity
 @Table(name = "khoan_thu")
 public class Fee {
@@ -20,12 +22,34 @@ public class Fee {
     @Column(name = "loai_khoan_thu")
     private Integer type; // 0: bắt buộc, 1: tự nguyện
 
-    /** Cách tính: per_apartment (theo căn), per_resident (theo nhân khẩu - nhân với số người trong căn) */
+    /** Cách tính: per_apartment, per_resident, per_vehicle (theo từng xe — dùng mức theo loại) */
     @Column(name = "charge_type", length = 20)
     private String chargeType;
 
+    /** Mức thu / 1 xe máy (khi charge_type = per_vehicle) */
+    @Column(name = "vehicle_rate_motorcycle")
+    private Double vehicleRateMotorcycle;
+
+    @Column(name = "vehicle_rate_car")
+    private Double vehicleRateCar;
+
+    @Column(name = "vehicle_rate_bicycle")
+    private Double vehicleRateBicycle;
+
     @Column(name = "han_nop", length = 20)
     private String deadline;
+
+    /** Tần suất: monthly, quarterly, yearly, one_time */
+    @Column(name = "frequency", length = 20)
+    private String frequency;
+
+    /** Ngày bắt đầu đợt thu đầu tiên */
+    @Column(name = "start_date")
+    private LocalDate startDate;
+
+    /** Ngày kết thúc đợt thu đầu tiên (= ngày bắt đầu đợt 2) */
+    @Column(name = "end_date")
+    private LocalDate endDate;
 
     public Long getId() {
         return id;
@@ -73,6 +97,54 @@ public class Fee {
 
     public void setDeadline(String deadline) {
         this.deadline = deadline;
+    }
+
+    public String getFrequency() {
+        return frequency;
+    }
+
+    public void setFrequency(String frequency) {
+        this.frequency = frequency;
+    }
+
+    public LocalDate getStartDate() {
+        return startDate;
+    }
+
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
+
+    public LocalDate getEndDate() {
+        return endDate;
+    }
+
+    public void setEndDate(LocalDate endDate) {
+        this.endDate = endDate;
+    }
+
+    public Double getVehicleRateMotorcycle() {
+        return vehicleRateMotorcycle;
+    }
+
+    public void setVehicleRateMotorcycle(Double vehicleRateMotorcycle) {
+        this.vehicleRateMotorcycle = vehicleRateMotorcycle;
+    }
+
+    public Double getVehicleRateCar() {
+        return vehicleRateCar;
+    }
+
+    public void setVehicleRateCar(Double vehicleRateCar) {
+        this.vehicleRateCar = vehicleRateCar;
+    }
+
+    public Double getVehicleRateBicycle() {
+        return vehicleRateBicycle;
+    }
+
+    public void setVehicleRateBicycle(Double vehicleRateBicycle) {
+        this.vehicleRateBicycle = vehicleRateBicycle;
     }
 }
 

@@ -14,10 +14,11 @@ import vn.bluemoon.backend.repository.VehicleRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/households")
-@CrossOrigin(origins = "*")
 public class HouseholdController {
 
     private final HouseholdRepository householdRepository;
@@ -25,6 +26,7 @@ public class HouseholdController {
     private final PopulationEventRepository populationEventRepository;
     private final TempResidenceRepository tempResidenceRepository;
     private final VehicleRepository vehicleRepository;
+    private static final Pattern ADDRESS_FLOOR_PATTERN = Pattern.compile("^[A-Za-z]\\s*-?\\s*(\\d{2})\\d{2}\\s*$");
 
     public HouseholdController(HouseholdRepository householdRepository,
                                ResidentRepository residentRepository,
@@ -52,6 +54,14 @@ public class HouseholdController {
 
     @PostMapping
     public ResponseEntity<Household> create(@RequestBody Household household) {
+        // Prevent creating household for commercial floors (shophouse / tầng đế)
+        if (household.getAddress() != null && !household.getAddress().isBlank()) {
+            String addr = household.getAddress().trim();
+            Integer floor = parseFloor(addr);
+            if (floor != null && floor >= 1 && floor <= 4) {
+                throw new IllegalArgumentException("Căn shophouse/tầng đế không tạo hộ khẩu/nhân khẩu");
+            }
+        }
         if (household.getAddress() != null && !household.getAddress().isBlank()) {
             if (householdRepository.existsByAddressIgnoreCase(household.getAddress().trim())) {
                 throw new IllegalArgumentException("Căn hộ này đã có hộ khẩu/chủ hộ, không thể tạo thêm");
@@ -85,8 +95,19 @@ public class HouseholdController {
     @Transactional
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         Household hh = householdRepository.findById(id)
-                .orElse(null);
-        // Xóa bản ghi tạm trú/tạm vắng và biến động gắn với hộ
+                .orElseThrow(() -> new IllegalArgumentException("Household not found"));
+
+        // Ghi biến động TRƯỚC khi xóa, để tránh lỗi FK constraint
+        PopulationEvent ev = new PopulationEvent();
+        ev.setType("out");
+        ev.setName(hh.getHeadName());
+        ev.setApartment(hh.getAddress());
+        ev.setDate(LocalDateTime.now());
+        ev.setReason("Xóa hộ khẩu");
+        // Không set household FK vì sắp xóa
+        populationEventRepository.save(ev);
+
+        // Xóa bản ghi tạm trú/tạm vắng và biến động cũ gắn với hộ
         tempResidenceRepository.deleteByHousehold_Id(id);
         populationEventRepository.deleteByHousehold_Id(id);
         // Xóa phương tiện thuộc hộ
@@ -95,17 +116,18 @@ public class HouseholdController {
         residentRepository.deleteByHousehold_Id(id);
         householdRepository.deleteById(id);
 
-        if (hh != null) {
-            PopulationEvent ev = new PopulationEvent();
-            ev.setHousehold(hh);
-            ev.setType("out");
-            ev.setName(hh.getHeadName());
-            ev.setApartment(hh.getAddress());
-            ev.setDate(LocalDateTime.now());
-            ev.setReason("Xóa hộ khẩu");
-            populationEventRepository.save(ev);
-        }
         return ResponseEntity.noContent().build();
+    }
+
+    private Integer parseFloor(String address) {
+        if (address == null) return null;
+        Matcher m = ADDRESS_FLOOR_PATTERN.matcher(address.trim());
+        if (!m.matches()) return null;
+        try {
+            return Integer.parseInt(m.group(1));
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }
 

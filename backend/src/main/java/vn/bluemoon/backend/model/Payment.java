@@ -32,6 +32,15 @@ public class Payment {
     @Column(name = "round_id")
     private Long roundId;
 
+    @Column(name = "payment_method", length = 20)
+    private String paymentMethod;
+
+    @Column(name = "payment_status", length = 20)
+    private String paymentStatus;
+
+    @Column(name = "online_txn_id", length = 64)
+    private String onlineTxnId;
+
     public Long getId() {
         return id;
     }
@@ -86,6 +95,30 @@ public class Payment {
 
     public void setRoundId(Long roundId) {
         this.roundId = roundId;
+    }
+
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public String getPaymentStatus() {
+        return paymentStatus;
+    }
+
+    public void setPaymentStatus(String paymentStatus) {
+        this.paymentStatus = paymentStatus;
+    }
+
+    public String getOnlineTxnId() {
+        return onlineTxnId;
+    }
+
+    public void setOnlineTxnId(String onlineTxnId) {
+        this.onlineTxnId = onlineTxnId;
     }
 
     public Long getFeeId() {

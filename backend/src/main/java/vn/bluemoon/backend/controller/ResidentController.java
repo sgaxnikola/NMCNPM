@@ -15,7 +15,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/residents")
-@CrossOrigin(origins = "*")
 public class ResidentController {
 
     private final ResidentRepository residentRepository;
@@ -138,5 +137,6 @@ public class ResidentController {
         }
         return ResponseEntity.noContent().build();
     }
+
 }
 

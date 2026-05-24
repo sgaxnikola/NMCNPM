@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Building2, Eye, EyeOff, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ImageWithFallback } from "./figma/ImageWithFallback";
+import { ImageWithFallback } from "./shared/ImageWithFallback";
 import type { UserRole } from "../types";
-import { loginAccount, registerAccount } from "../api";
+import { loginAccount, registerAccount, registerResidentAccount } from "../api";
 
 interface LoginScreenProps {
-  onLogin: (role: UserRole, email: string) => void;
+  onLogin: (role: UserRole, username: string) => void;
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
@@ -16,31 +16,47 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<"Kế toán" | "Tổ trưởng" | "Tổ phó">("Kế toán");
+  const [role, setRole] = useState<"Kế toán" | "Tổ trưởng" | "Tổ phó" | "Cư dân">("Kế toán");
+  const [residentHouseholdId, setResidentHouseholdId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
+  const roleDropdownRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; confirmPassword?: string }>({});
 
-  const roles: Array<"Kế toán" | "Tổ trưởng" | "Tổ phó"> = ["Kế toán", "Tổ trưởng", "Tổ phó"];
+  const roles: Array<"Kế toán" | "Tổ trưởng" | "Tổ phó" | "Cư dân"> = ["Kế toán", "Tổ trưởng", "Tổ phó", "Cư dân"];
 
-  const mapDisplayRoleToValue = (display: "Kế toán" | "Tổ trưởng" | "Tổ phó"): UserRole => {
+  useEffect(() => {
+    if (!showRoleDropdown) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const el = roleDropdownRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      setShowRoleDropdown(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [showRoleDropdown]);
+
+  const mapDisplayRoleToValue = (display: "Kế toán" | "Tổ trưởng" | "Tổ phó" | "Cư dân"): UserRole => {
     if (display === "Kế toán") return "accountant";
     if (display === "Tổ trưởng") return "leader";
+    if (display === "Cư dân") return "resident";
     return "viceLeader";
   };
 
   const validateLogin = () => {
     const newErrors: { email?: string; password?: string } = {};
+    const selectedRole = mapDisplayRoleToValue(role);
     if (!email.trim()) {
-      newErrors.email = "Vui lòng nhập email";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      newErrors.email = selectedRole === "resident" ? "Vui lòng nhập tài khoản" : "Vui lòng nhập email";
+    } else if (selectedRole !== "resident" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       newErrors.email = "Email không hợp lệ";
     }
     if (!password.trim()) {
-      newErrors.password = "Vui lòng nhập mật khẩu";
+      newErrors.password = selectedRole === "resident" ? "Vui lòng nhập số điện thoại" : "Vui lòng nhập mật khẩu";
     } else if (password.length < 6) {
-      newErrors.password = "Mật khẩu phải có ít nhất 6 ký tự";
+      newErrors.password = "Thông tin đăng nhập phải có ít nhất 6 ký tự";
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -69,11 +85,12 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     if (!validateLogin()) return;
     setLoading(true);
     try {
-      const result = await loginAccount({ email, password });
+      const username = email.trim().toLowerCase();
+      const result = await loginAccount({ email: username, password });
       const userRole = result.role;
       const displayRole = roles.find((r) => mapDisplayRoleToValue(r) === userRole) ?? userRole;
       toast.success("Đăng nhập thành công", { description: `Xin chào, vai trò: ${displayRole}` });
-      onLogin(userRole, email.trim().toLowerCase());
+      onLogin(userRole, username);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Đăng nhập thất bại";
       toast.error("Đăng nhập thất bại", { description: message });
@@ -87,11 +104,23 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     setLoading(true);
     try {
       const mappedRole = mapDisplayRoleToValue(role);
-      await registerAccount({ email, password, role: mappedRole });
+      if (mappedRole === "resident") {
+        const hh = Number(residentHouseholdId);
+        if (!Number.isFinite(hh) || hh <= 0) {
+          setErrors({ ...errors, confirmPassword: undefined, password: undefined, email: undefined });
+          toast.error("Đăng ký thất bại", { description: "Vui lòng nhập mã hộ (householdId) hợp lệ" });
+          setLoading(false);
+          return;
+        }
+        await registerResidentAccount({ email, password, householdId: hh });
+      } else {
+        await registerAccount({ email, password, role: mappedRole });
+      }
       toast.success("Đăng ký thành công", { description: "Tài khoản đã được lưu trên hệ thống. Bạn có thể đăng nhập ngay." });
       setMode("login");
       setPassword("");
       setConfirmPassword("");
+      setResidentHouseholdId("");
       setErrors({});
     } catch (err) {
       const message = err instanceof Error ? err.message : "Đăng ký thất bại";
@@ -153,7 +182,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         style={{ background: "linear-gradient(135deg, #6F6AF8 0%, #4a45c2 100%)" }}
       >
         <ImageWithFallback
-          src="https://images.unsplash.com/photo-1762902858673-cd9d7432bf9a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBhcGFydG1lbnQlMjBidWlsZGluZyUyMHB1cnBsZSUyMG5pZ2h0fGVufDF8fHx8MTc3MzQwMzk4NXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral"
+          src="https://images.unsplash.com/photo-1762902858673-cd9d7432bf9a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBhcGFydG1lbnQlMjBidWlsZGluZyUyMHB1cnBsZSUyMG5pZ2h0fGVufDF8fHx8MTc3MzQwMzk4NXww&ixlib=rb-4.1.0&q=80&w=1080"
           alt="Apartment building"
           className="absolute inset-0 w-full h-full object-cover opacity-40"
         />
@@ -166,8 +195,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       </div>
 
       {/* Right - Login Form */}
-      <div className="flex-1 flex items-center justify-center" style={{ background: "#F2F2FD" }}>
-        <div className="w-full max-w-sm px-8" onKeyDown={handleKeyDown}>
+      <div className="flex flex-1 items-center justify-center bg-gradient-to-br from-[#F6F7FD] via-[#F2F2FD] to-[#E8EBF0] px-4 py-8 sm:py-12">
+        <div className="w-full max-w-md" onKeyDown={handleKeyDown}>
+          <div
+            className="rounded-2xl border border-white/80 bg-white/95 p-6 shadow-xl shadow-[rgba(111,106,248,0.14)] ring-1 ring-[#6F6AF8]/[0.07] backdrop-blur-sm sm:p-8"
+          >
           {/* Logo */}
           <div className="flex items-center gap-2 mb-8">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "#6F6AF8" }}>
@@ -269,14 +301,13 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             {mode === "login" ? "Đăng nhập" : "Đăng ký tài khoản"}
           </h2>
 
-          {/* Role Dropdown (chỉ khi đăng ký) */}
-          {mode === "register" && (
+          {/* Role Dropdown */}
+          {(mode === "login" || mode === "register") && (
           <div className="mb-4">
             <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>Vai trò</label>
-            <div className="relative">
+            <div className="relative" ref={roleDropdownRef}>
               <button
                 onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                onBlur={() => setTimeout(() => setShowRoleDropdown(false), 150)}
                 className="w-full flex items-center justify-between px-3 py-2.5 bg-white border rounded-md text-left"
                 style={{ borderColor: "#CFCFEF", borderRadius: 6 }}
                 aria-expanded={showRoleDropdown}
@@ -290,7 +321,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   {roles.map((r) => (
                     <button
                       key={r}
-                      onClick={() => { setRole(r); setShowRoleDropdown(false); }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setRole(r);
+                        setShowRoleDropdown(false);
+                      }}
                       className="block w-full text-left px-3 py-2 hover:bg-gray-50 transition-colors"
                       style={{ color: "#1A1A2E", background: r === role ? "#F2F2FD" : undefined }}
                       role="option"
@@ -305,14 +340,16 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           </div>
           )}
 
-          {/* Email */}
+          {/* Username / Email */}
           <div className="mb-4">
-            <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>Email</label>
+            <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>
+              {mapDisplayRoleToValue(role) === "resident" ? "CCCD" : "Email"}
+            </label>
             <input
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => { setEmail(e.target.value); if (errors.email) setErrors(prev => ({ ...prev, email: undefined })); }}
-              placeholder="Nhập email của bạn"
+              placeholder={mapDisplayRoleToValue(role) === "resident" ? "Nhập CCCD" : "Nhập email của bạn"}
               className="w-full px-3 py-2.5 bg-white border rounded-md outline-none focus:ring-2"
               style={{ borderColor: errors.email ? "#F44336" : "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
               aria-invalid={!!errors.email}
@@ -322,7 +359,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
           {/* Password */}
           <div className="mb-6">
-            <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>Mật khẩu</label>
+            <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>
+              {mapDisplayRoleToValue(role) === "resident" ? "Số điện thoại" : "Mật khẩu"}
+            </label>
             <div className="relative">
               <input
                 type={showPassword ? "text" : "password"}
@@ -365,6 +404,25 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             </div>
           )}
 
+          {/* HouseholdId (chỉ khi đăng ký cư dân) */}
+          {mode === "register" && role === "Cư dân" && (
+            <div className="mb-6">
+              <label className="block text-sm mb-1.5" style={{ color: "#1A1A2E", fontWeight: 500 }}>Mã hộ (householdId)</label>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={residentHouseholdId}
+                onChange={(e) => setResidentHouseholdId(e.target.value)}
+                placeholder="Ví dụ: 1"
+                className="w-full px-3 py-2.5 bg-white border rounded-md outline-none focus:ring-2"
+                style={{ borderColor: "#CFCFEF", borderRadius: 6, color: "#1A1A2E" }}
+              />
+              <p className="text-xs mt-1" style={{ color: "#717182" }}>
+                Dùng để gán tài khoản cư dân vào đúng hộ gia đình trong hệ thống.
+              </p>
+            </div>
+          )}
+
           {/* Submit Button */}
           <button
             onClick={mode === "login" ? handleLogin : handleRegister}
@@ -383,7 +441,21 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             {mode === "login" ? (
               <>
                 <button type="button" className="text-sm hover:underline" style={{ color: "#6F6AF8" }} onClick={() => { setMode("forgot"); setErrors({}); setForgotStep(1); }}>Quên mật khẩu?</button>
-                <button type="button" className="text-sm hover:underline" style={{ color: "#6F6AF8" }} onClick={() => { setMode("register"); setErrors({}); }}>Đăng ký tài khoản</button>
+                <button
+                  type="button"
+                  className="text-sm hover:underline"
+                  style={{ color: "#6F6AF8" }}
+                  onClick={() => {
+                    if (mapDisplayRoleToValue(role) === "resident") {
+                      toast.info("Tài khoản cư dân do hệ thống cấp theo hộ gia đình.");
+                      return;
+                    }
+                    setMode("register");
+                    setErrors({});
+                  }}
+                >
+                  Đăng ký tài khoản
+                </button>
               </>
             ) : (
               <button type="button" className="text-sm hover:underline" style={{ color: "#6F6AF8" }} onClick={() => { setMode("login"); setErrors({}); setConfirmPassword(""); }}>Đã có tài khoản? Đăng nhập</button>
@@ -391,6 +463,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           </div>
           </>
           )}
+          </div>
         </div>
       </div>
     </div>

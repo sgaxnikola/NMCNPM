@@ -19,7 +19,6 @@ interface DashboardProps {
 
 const emptyChartData: { label: string; amount: number }[] = [];
 const FEE_COLORS = ["#6F6AF8", "#4CAF50", "#FF9800", "#F44336", "#9C27B0", "#00BCD4"];
-const filterTabs: Array<"Hôm nay" | "Tuần này" | "Tháng này"> = ["Hôm nay", "Tuần này", "Tháng này"];
 
 type PopulationEventType = "in" | "out";
 
@@ -32,7 +31,6 @@ interface PopulationEvent {
 }
 
 export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, onCollectPayment, onNavigate }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState<"Hôm nay" | "Tuần này" | "Tháng này">("Tháng này");
   const [residents, setResidents] = useState<Resident[]>([]);
   const [households, setHouseholds] = useState<Household[]>([]);
   const [populationChanges, setPopulationChanges] = useState<PopulationEvent[]>([]);
@@ -105,6 +103,18 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
     today.setSeconds(0, 0);
 
     for (const fee of fees) {
+      if (fee.chargeType === "per_vehicle") {
+        let isDeadlinePassedPv = false;
+        if (fee.deadline) {
+          const d = new Date(fee.deadline);
+          if (!Number.isNaN(d.getTime())) {
+            d.setHours(23, 59, 59, 999);
+            isDeadlinePassedPv = d.getTime() < today.getTime();
+          }
+        }
+        map.set(fee.id, { pct: 0, isDeadlinePassed: isDeadlinePassedPv, type: fee.type });
+        continue;
+      }
       const amount = Number(fee.amount || "0");
       let pct = 0;
       if (amount && amount > 0) {
@@ -177,6 +187,7 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
     let collectedTotal = 0;
 
     for (const fee of fees) {
+      if (fee.chargeType === "per_vehicle") continue;
       const amount = Number(fee.amount || "0");
       if (!amount || amount <= 0) continue;
 
@@ -214,9 +225,11 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
   const recentFees = fees.slice(0, 4);
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ background: "#F2F2FD" }}>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: "#CFCFEF" }}>
+      <div
+        className="flex items-center justify-between border-b border-[#E2E4F0] bg-white/90 px-6 py-4 shadow-sm backdrop-blur-sm"
+      >
         <h1 className="text-xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>Trang chủ</h1>
         <div className="flex items-center gap-4">
           <button className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors">
@@ -229,35 +242,15 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 px-6 pt-4">
-        {filterTabs.map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className="px-4 py-1.5 rounded-full text-sm transition-all"
-            style={{
-              background: activeTab === tab ? "#6F6AF8" : "#fff",
-              color: activeTab === tab ? "#fff" : "#1A1A2E",
-              border: `1px solid ${activeTab === tab ? "#6F6AF8" : "#CFCFEF"}`,
-              fontWeight: activeTab === tab ? 600 : 400,
-              borderRadius: 20,
-            }}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
       {/* Content */}
       <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
         {/* Stat Cards */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           {stats.map((stat) => {
             const Icon = stat.icon;
             const subInfo = "subInfo" in stat ? stat.subInfo : null;
             return (
-              <div key={stat.label} className="bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+              <div key={stat.label} className="bm-card bm-card-hover p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: `${stat.color}15` }}>
                     <Icon size={20} style={{ color: stat.color }} />
@@ -269,7 +262,7 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
                 <div className="text-2xl" style={{ fontWeight: 700, color: "#1A1A2E" }}>{stat.value}</div>
                 <div className="text-sm" style={{ color: "#717182" }}>{stat.label}</div>
                 {subInfo != null && (
-                  <div className="mt-2 pt-2 border-t space-y-0.5" style={{ borderColor: "#F2F2FD" }}>
+                  <div className="mt-2 pt-2 border-t space-y-0.5" style={{ borderColor: "#EEF0FB" }}>
                     <div className="text-[11px]" style={{ color: "#717182" }}>Tỉ lệ lấp đầy: <span style={{ color: "#1A1A2E", fontWeight: 500 }}>{subInfo.occupancyRate}%</span></div>
                     <div className="text-[11px]" style={{ color: "#717182" }}>Số căn ở: <span style={{ color: "#4CAF50", fontWeight: 500 }}>{subInfo.occupied}</span></div>
                     <div className="text-[11px]" style={{ color: "#717182" }}>Số căn trống: <span style={{ color: "#FF9800", fontWeight: 500 }}>{subInfo.empty}</span></div>
@@ -282,9 +275,9 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
         </div>
 
         {/* Charts Row */}
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
           {/* Nhiều hình tròn nhỏ - mỗi khoản thu là 1 vòng tròn, tối đa 5, ưu tiên khoản bắt buộc */}
-          <div className="col-span-3 bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="col-span-3 bm-card bm-card-hover p-4">
             <h3 className="mb-4" style={{ fontWeight: 600, color: "#1A1A2E" }}>Tỉ lệ hoàn thành các khoản thu</h3>
             {topFeeCompletionData.length === 0 ? (
               <p className="text-sm" style={{ color: "#717182" }}>
@@ -328,7 +321,7 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
           </div>
 
           {/* Population Changes */}
-          <div className="col-span-2 bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="col-span-2 bm-card bm-card-hover p-4">
             <h3 className="mb-4" style={{ fontWeight: 600, color: "#1A1A2E" }}>Biến động dân cư</h3>
             {populationChanges.length === 0 ? (
               <p className="text-sm" style={{ color: "#717182" }}>
@@ -337,7 +330,7 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
             ) : (
               <div className="space-y-3 max-h-64 overflow-auto pr-1">
                 {populationChanges.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between py-2 border-b" style={{ borderColor: "#F2F2FD" }}>
+                  <div key={i} className="flex items-center justify-between py-2 border-b" style={{ borderColor: "#EEF0FB" }}>
                     <div>
                       <div className="text-sm" style={{ fontWeight: 500, color: "#1A1A2E" }}>{item.name}</div>
                       <div className="text-xs" style={{ color: "#717182" }}>
@@ -378,9 +371,10 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
         </div>
 
         {/* Bottom Row */}
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
           {/* Recent Fees */}
-          <div className="col-span-3 bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="col-span-3 bm-table">
+            <div className="p-4">
             <h3 className="mb-3" style={{ fontWeight: 600, color: "#1A1A2E" }}>Khoản thu gần đây</h3>
             <table className="w-full">
               <thead>
@@ -443,10 +437,11 @@ export function DashboardScreen({ fees, payments, canManageFees, onCreateFee, on
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Quick Actions */}
-          <div className="col-span-2 bg-white rounded-lg p-4 border" style={{ borderColor: "#CFCFEF", borderRadius: 8 }}>
+          <div className="col-span-2 bm-card bm-card-hover p-4">
             <h3 className="mb-3" style={{ fontWeight: 600, color: "#1A1A2E" }}>Thao tác nhanh</h3>
             <div className="space-y-3">
               <button
